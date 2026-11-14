@@ -1,0 +1,6 @@
+# crate builds with Xcode 27.1, which older GitHub-hosted macOS images do not
+# carry. The repository's self-hosted runner is labelled xcode-27; tell
+# actionlint that the label is intentional.
+self-hosted-runner:
+  labels:
+    - xcode-27
