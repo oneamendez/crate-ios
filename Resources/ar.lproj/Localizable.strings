@@ -40,7 +40,7 @@
 "common.no" = "لا";
 "common.yes" = "نعم";
 "home.delete.confirm" = "حذف الجهاز الافتراضي";
-"home.delete.message" = "سيُحذف قرصها (%@) من هذا الـ iPhone. لا يمكن التراجع عن ذلك.";
+"home.delete.message" = "سيُحذف قرصها (%@) من هذا الجهاز. لا يمكن التراجع عن ذلك.";
 "home.delete.title" = "حذف %@؟";
 "home.empty.action" = "تثبيت Linux";
 "home.empty.message" = "ثبّت توزيعة Linux للبدء. ستعمل هنا مباشرة، حتى دون اتصال.";
@@ -55,7 +55,7 @@
 "home.machines.title" = "جاهزة عندما تكون جاهزًا";
 "home.newVM" = "جهاز افتراضي جديد";
 "home.settings.a11y" = "فتح الإعدادات";
-"home.subtitle" = "أسطح مكتب Linux الخاصة بك، بخصوصية كاملة وعلى هذا الـ iPhone.";
+"home.subtitle" = "أسطح مكتب Linux الخاصة بك، بخصوصية كاملة وعلى هذا الجهاز.";
 "install.cancel.button" = "إلغاء التثبيت";
 "install.cancel.keep" = "متابعة التثبيت";
 "install.cancel.message" = "سيُهمل ما نُزّل حتى الآن.";

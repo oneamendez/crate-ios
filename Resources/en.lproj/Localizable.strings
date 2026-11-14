@@ -40,7 +40,7 @@
 "common.no" = "No";
 "common.yes" = "Yes";
 "home.delete.confirm" = "Delete VM";
-"home.delete.message" = "Its disk (%@) is removed from this iPhone. This can't be undone.";
+"home.delete.message" = "Its disk (%@) is removed from this device. This can't be undone.";
 "home.delete.title" = "Delete %@?";
 "home.empty.action" = "Install Linux";
 "home.empty.message" = "Install a Linux distribution to get started. It runs right here, even offline.";
@@ -55,7 +55,7 @@
 "home.machines.title" = "Ready when you are";
 "home.newVM" = "New VM";
 "home.settings.a11y" = "Open settings";
-"home.subtitle" = "Your Linux desktops, private and on this iPhone.";
+"home.subtitle" = "Your Linux desktops, private and on this device.";
 "install.cancel.button" = "Cancel installation";
 "install.cancel.keep" = "Keep Installing";
 "install.cancel.message" = "What's downloaded so far is discarded.";

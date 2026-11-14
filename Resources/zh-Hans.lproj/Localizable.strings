@@ -40,7 +40,7 @@
 "common.no" = "否";
 "common.yes" = "是";
 "home.delete.confirm" = "删除虚拟机";
-"home.delete.message" = "其磁盘（%@）将从此 iPhone 中删除，此操作无法撤销。";
+"home.delete.message" = "其磁盘（%@）将从此设备中删除，此操作无法撤销。";
 "home.delete.title" = "删除 %@？";
 "home.empty.action" = "安装 Linux";
 "home.empty.message" = "安装一个 Linux 发行版即可开始。它直接在此设备上运行，离线也能使用。";
@@ -55,7 +55,7 @@
 "home.machines.title" = "随时就绪";
 "home.newVM" = "新建虚拟机";
 "home.settings.a11y" = "打开设置";
-"home.subtitle" = "你的 Linux 桌面，私密运行，就在这台 iPhone 上。";
+"home.subtitle" = "你的 Linux 桌面，私密运行，就在此设备上。";
 "install.cancel.button" = "取消安装";
 "install.cancel.keep" = "继续安装";
 "install.cancel.message" = "已下载的内容将被丢弃。";
