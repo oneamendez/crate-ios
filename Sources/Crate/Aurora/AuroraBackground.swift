@@ -62,8 +62,8 @@ struct AuroraBackground: View {
             // A very quiet star field keeps the large gradients from looking flat.
             let stars = dark ? 34 : 22
             for index in 0..<stars {
-                let x = CGFloat(fraction(index * 0.618_033_988_75 + 0.12)) * size.width
-                let y = CGFloat(fraction(index * 0.414_213_562_37 + 0.31)) * size.height
+                let x = CGFloat(fraction(Double(index) * 0.618_033_988_75 + 0.12)) * size.width
+                let y = CGFloat(fraction(Double(index) * 0.414_213_562_37 + 0.31)) * size.height
                 let shimmer = 0.5 + 0.5 * sin(time / 5 + Double(index))
                 let alpha = (dark ? 0.10 : 0.06) * (0.35 + 0.65 * shimmer) * intensity
                 let dot = CGRect(x: x, y: y, width: 1.4, height: 1.4)

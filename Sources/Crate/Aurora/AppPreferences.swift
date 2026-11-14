@@ -80,8 +80,8 @@ enum AppLanguage: String, CaseIterable, Identifiable, Codable {
     static func resolvedCode(selection raw: String) -> String {
         let selection = AppLanguage(rawValue: raw) ?? .system
         switch selection {
-        case .system: matching().code ?? "en"
-        default: selection.code ?? "en"
+        case .system: return matching().code ?? "en"
+        default: return selection.code ?? "en"
         }
     }
 
