@@ -67,6 +67,9 @@ final class MachineRunner {
             crate_machine_free(old)
             machine = nil
         }
+        // Associate failures during validation and creation with this VM too,
+        // not only the ones that happen after the engine has started.
+        machineID = vm.id
         let files = GuestFiles(for: vm)
         if !files.missing.isEmpty {
             phase = .failed(L10n.format("vm.error.filesMissing", vm.name, files.missing.joined(separator: ", ")))
@@ -79,7 +82,6 @@ final class MachineRunner {
             return
         }
         phase = .starting
-        machineID = vm.id
         console.reset()
         display.reset()
         let settings = Settings(vm: vm, files: files, display: display)

@@ -18,8 +18,7 @@ struct HomeScreen: View {
     let onShowJIT: () -> Void
     let onSettings: () -> Void
 
-    @State private var deleting: Machine?
-    @State private var stopping: Machine?
+    @State private var dialog: HomeDialog?
     @State private var editing: Machine?
 
     private var greetingKey: String {
@@ -72,42 +71,32 @@ struct HomeScreen: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .confirmationDialog(
-                L10n.format("home.delete.title", deleting?.name ?? ""),
-                isPresented: Binding(get: { deleting != nil },
-                                     set: { if !$0 { deleting = nil } }),
+                L10n.format(dialog?.titleKey ?? "home.delete.title", dialog?.machine.name ?? ""),
+                isPresented: Binding(get: { dialog != nil },
+                                     set: { if !$0 { dialog = nil } }),
                 titleVisibility: .visible,
-                presenting: deleting
-            ) { machine in
-                Button(role: .destructive) {
-                    if runner.machineID == machine.id { runner.stop() }
-                    store.delete(machine)
-                } label: {
-                    Text(l10n: "home.delete.confirm")
+                presenting: dialog
+            ) { dialog in
+                switch dialog {
+                case .delete(let machine):
+                    Button(role: .destructive) {
+                        if runner.machineID == machine.id { runner.stop() }
+                        store.delete(machine)
+                    } label: {
+                        Text(l10n: "home.delete.confirm")
+                    }
+                case .stop(let machine):
+                    Button(role: .destructive) {
+                        stop(machine)
+                    } label: {
+                        Text(l10n: "machine.stop.confirm")
+                    }
                 }
                 Button(role: .cancel) {} label: {
                     Text(l10n: "common.cancel")
                 }
-            } message: { machine in
-                Text(verbatim: L10n.format("home.delete.message",
-                                           Format.bytes(Int64(machine.diskUsedGB * 1e9))))
-            }
-            .confirmationDialog(
-                L10n.format("machine.stop.title", stopping?.name ?? ""),
-                isPresented: Binding(get: { stopping != nil },
-                                     set: { if !$0 { stopping = nil } }),
-                titleVisibility: .visible,
-                presenting: stopping
-            ) { machine in
-                Button(role: .destructive) {
-                    stop(machine)
-                } label: {
-                    Text(l10n: "machine.stop.confirm")
-                }
-                Button(role: .cancel) {} label: {
-                    Text(l10n: "common.cancel")
-                }
-            } message: { machine in
-                Text(verbatim: L10n.format("machine.stop.message", machine.name))
+            } message: { dialog in
+                Text(verbatim: dialog.message)
             }
             .sheet(item: $editing) { machine in
                 MachineSettingsSheet(machine: machine)
@@ -192,9 +181,9 @@ struct HomeScreen: View {
                         isBusyElsewhere: status == .otherRunning,
                         onOpen: { onStart(machine) },
                         onTerminal: { onTerminal(machine) },
-                        onStop: { stopping = machine },
+                        onStop: { dialog = .stop(machine) },
                         onEditSettings: { editing = machine },
-                        onDelete: { deleting = machine })
+                        onDelete: { dialog = .delete(machine) })
                 }
             }
         }
@@ -242,20 +231,40 @@ struct HomeScreen: View {
     }
 }
 
+/// One destructive question at a time, so the two dialogs cannot compete for
+/// presentation on the same view.
+private enum HomeDialog {
+    case delete(Machine)
+    case stop(Machine)
+
+    var machine: Machine {
+        switch self {
+        case .delete(let machine), .stop(let machine): machine
+        }
+    }
+
+    var titleKey: String {
+        switch self {
+        case .delete: "home.delete.title"
+        case .stop: "machine.stop.title"
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .delete(let machine):
+            L10n.format("home.delete.message", Format.bytes(Int64(machine.diskUsedGB * 1e9)))
+        case .stop(let machine):
+            L10n.format("machine.stop.message", machine.name)
+        }
+    }
+}
+
 /// A quiet progress card for an install that is happening while another page
 /// is showing. It reports the installer's own phase and can be opened.
 struct InstallActivityCard: View {
     @Environment(Installer.self) private var installer
     let onShowInstall: () -> Void
-
-    private var progress: Double? {
-        switch installer.phase {
-        case .downloading(let done, let total), .unpacking(let done, let total):
-            return total > 0 ? Double(done) / Double(total) : nil
-        default:
-            return nil
-        }
-    }
 
     var body: some View {
         Button(action: onShowInstall) {
@@ -272,7 +281,7 @@ struct InstallActivityCard: View {
                             .font(AuroraType.headline)
                             .foregroundStyle(AuroraPalette.textPrimary)
                             .lineLimit(1)
-                        AuroraProgressBar(value: progress, height: 5)
+                        AuroraProgressBar(value: InstallProgressText.progress(for: installer), height: 5)
                         Text(verbatim: InstallProgressText.detail(for: installer))
                             .font(AuroraType.caption)
                             .foregroundStyle(AuroraPalette.textSecondary)

@@ -145,7 +145,6 @@ struct RootView: View {
                     }
             }
         }
-        .background { AuroraBackground().ignoresSafeArea() }
     }
 
     @ViewBuilder

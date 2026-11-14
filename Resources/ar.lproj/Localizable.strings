@@ -327,8 +327,8 @@
 "splash.a11y" = "Crate. لينكس في جيبك. اضغط مرتين للمتابعة.";
 "splash.continue" = "اضغط للمتابعة";
 "splash.tagline" = "لينكس في جيبك.";
-"status.busy" = "جهاز افتراضي آخر قيد التشغيل";
-"status.failed" = "تحتاج إلى انتباه";
+"status.busy" = "مشغول";
+"status.failed" = "خطأ";
 "status.running" = "قيد التشغيل";
 "status.starting" = "جارٍ التشغيل";
 "status.stopped" = "متوقفة";

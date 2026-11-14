@@ -327,8 +327,8 @@
 "splash.a11y" = "Crate。 Linux，随身携带。双击继续。";
 "splash.continue" = "轻点继续";
 "splash.tagline" = "Linux，随身携带。";
-"status.busy" = "另一台虚拟机正在运行";
-"status.failed" = "需要处理";
+"status.busy" = "忙碌";
+"status.failed" = "错误";
 "status.running" = "运行中";
 "status.starting" = "正在启动";
 "status.stopped" = "已停止";

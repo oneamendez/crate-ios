@@ -327,8 +327,8 @@
 "splash.a11y" = "Crate. Linux, in your pocket. Double-tap to continue.";
 "splash.continue" = "Tap to continue";
 "splash.tagline" = "Linux, in your pocket.";
-"status.busy" = "Another VM is running";
-"status.failed" = "Needs attention";
+"status.busy" = "Busy";
+"status.failed" = "Error";
 "status.running" = "Running";
 "status.starting" = "Starting";
 "status.stopped" = "Stopped";

@@ -15,7 +15,7 @@ struct AuroraBackground: View {
     @Environment(\.auroraReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { timeline in
             Canvas { context, size in
                 draw(in: &context, size: size,
                      time: reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate)
@@ -127,7 +127,7 @@ struct AuroraParticles: View {
     }()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isVisible)) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isVisible)) { timeline in
             Canvas { context, size in
                 guard isVisible else { return }
                 let time = timeline.date.timeIntervalSinceReferenceDate
