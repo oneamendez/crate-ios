@@ -4,56 +4,110 @@
 
 import SwiftUI
 
-/// The installed VMs, one large card each, paging vertically.
+/// The dashboard: brand, a welcome, the live install, and one glass card per
+/// VM. Every figure comes from the store and the running engine.
 struct HomeScreen: View {
     @Environment(MachineStore.self) private var store
     @Environment(MachineRunner.self) private var runner
+    @Environment(Installer.self) private var installer
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     let onStart: (Machine) -> Void
+    let onTerminal: (Machine) -> Void
     let onInstall: () -> Void
     let onShowJIT: () -> Void
+    let onSettings: () -> Void
 
     @State private var deleting: Machine?
+    @State private var stopping: Machine?
     @State private var editing: Machine?
-    @Environment(\.dynamicTypeSize) private var typeSize
-    /// Each card's height, fixed while scrolling (see fixCardHeight).
-    @State private var cardHeight: CGFloat?
-    @State private var cardHeightScreen: CGSize = .zero
+
+    private var greetingKey: String {
+        let hour = Calendar.current.component(.hour, from: .now)
+        switch hour {
+        case 5..<12: return "home.greeting.morning"
+        case 12..<17: return "home.greeting.afternoon"
+        case 17..<22: return "home.greeting.evening"
+        default: return "home.greeting.night"
+        }
+    }
+
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 300 : 338,
+                            maximum: 620),
+                  spacing: 18, alignment: .top)]
+    }
 
     var body: some View {
         NavigationStack {
-            Group {
-                if store.machines.isEmpty {
-                    EmptyHome(onInstall: onInstall)
-                } else {
-                    cards
-                }
-            }
-            .background(Color(.systemGroupedBackground))
-            .navigationTitle("My VMs")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: onShowJIT) {
-                        JITBadge()
+            ZStack {
+                AuroraBackground()
+                ScrollView {
+                    AuroraContentColumn {
+                        VStack(alignment: .leading, spacing: AuroraSpace.xl) {
+                            header
+                            if installer.phase != .idle {
+                                InstallActivityCard(onShowInstall: onInstall)
+                            }
+                            if store.machines.isEmpty {
+                                AuroraCard(tint: AuroraPalette.cyan, padding: 4) {
+                                    AuroraEmptyState(
+                                        titleKey: "home.empty.title",
+                                        messageKey: "home.empty.message",
+                                        actionKey: "home.empty.action",
+                                        action: onInstall)
+                                }
+                                .padding(.top, 4)
+                            } else {
+                                machines
+                            }
+                            footer
+                        }
+                        .padding(.horizontal, AuroraSpace.lg)
+                        .padding(.top, AuroraSpace.sm)
+                        .padding(.bottom, 42)
                     }
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Install a VM", systemImage: "plus", action: onInstall)
-                }
+                .scrollIndicators(.hidden)
             }
+            .toolbar(.hidden, for: .navigationBar)
             .confirmationDialog(
-                "Delete \(deleting?.name ?? "")?",
-                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                L10n.format("home.delete.title", deleting?.name ?? ""),
+                isPresented: Binding(get: { deleting != nil },
+                                     set: { if !$0 { deleting = nil } }),
                 titleVisibility: .visible,
                 presenting: deleting
             ) { machine in
-                Button("Delete VM", role: .destructive) {
-                    // Not out from under it while it runs.
+                Button(role: .destructive) {
                     if runner.machineID == machine.id { runner.stop() }
                     store.delete(machine)
+                } label: {
+                    Text(l10n: "home.delete.confirm")
+                }
+                Button(role: .cancel) {} label: {
+                    Text(l10n: "common.cancel")
                 }
             } message: { machine in
-                Text("Its disk (\(Format.bytes(Int64(machine.diskUsedGB * 1e9)))) is removed from this iPhone. This can't be undone.")
+                Text(verbatim: L10n.format("home.delete.message",
+                                           Format.bytes(Int64(machine.diskUsedGB * 1e9))))
+            }
+            .confirmationDialog(
+                L10n.format("machine.stop.title", stopping?.name ?? ""),
+                isPresented: Binding(get: { stopping != nil },
+                                     set: { if !$0 { stopping = nil } }),
+                titleVisibility: .visible,
+                presenting: stopping
+            ) { machine in
+                Button(role: .destructive) {
+                    stop(machine)
+                } label: {
+                    Text(l10n: "machine.stop.confirm")
+                }
+                Button(role: .cancel) {} label: {
+                    Text(l10n: "common.cancel")
+                }
+            } message: { machine in
+                Text(verbatim: L10n.format("machine.stop.message", machine.name))
             }
             .sheet(item: $editing) { machine in
                 MachineSettingsSheet(machine: machine)
@@ -61,101 +115,221 @@ struct HomeScreen: View {
         }
     }
 
-    /// A card is 75% of the visible height, measured once per screen size.
-    /// Measured continuously, cards grew as the title collapsed under a scroll.
-    private func fixCardHeight(for viewport: Viewport) {
-        guard cardHeight == nil || viewport.screen != cardHeightScreen else { return }
-        cardHeightScreen = viewport.screen
-        cardHeight = (viewport.visibleHeight * 0.75).rounded()
+    // MARK: - Header
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: AuroraSpace.lg) {
+            HStack(spacing: AuroraSpace.sm) {
+                CrateBrandLockup(markSize: 38, wordmarkSize: 25)
+                Spacer(minLength: 8)
+                AuroraJITBadge(compact: typeSize.isAccessibilitySize, action: onShowJIT)
+                Button(action: onSettings) {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(AuroraIconButtonStyle(size: 42))
+                .accessibilityLabel(Text(l10n: "home.settings.a11y"))
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(l10n: greetingKey)
+                    .font(AuroraType.hero)
+                    .foregroundStyle(AuroraPalette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(l10n: "home.subtitle")
+                    .font(AuroraType.body)
+                    .foregroundStyle(AuroraPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: AuroraSpace.sm) {
+                Button(action: onInstall) {
+                    Label {
+                        Text(l10n: "home.newVM")
+                    } icon: {
+                        Image(systemName: "plus")
+                    }
+                }
+                .buttonStyle(AuroraPrimaryButtonStyle())
+
+                Button(action: onSettings) {
+                    Label {
+                        Text(l10n: "tab.settings")
+                    } icon: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                }
+                .buttonStyle(AuroraSecondaryButtonStyle())
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.top, 6)
     }
 
-    private var cards: some View {
-        ScrollView {
-            LazyVStack(spacing: 20) {
+    // MARK: - Machines
+
+    private var machines: some View {
+        VStack(alignment: .leading, spacing: AuroraSpace.md) {
+            HStack(alignment: .firstTextBaseline, spacing: AuroraSpace.sm) {
+                AuroraSectionHeader(titleKey: "home.machines.title",
+                                    subtitleKey: nil,
+                                    eyebrowKey: "home.machines.eyebrow")
+                Spacer(minLength: 0)
+                Text(verbatim: "\(store.machines.count)")
+                    .font(.system(.subheadline, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(AuroraPalette.textTertiary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(AuroraPalette.hairline, in: Capsule())
+                    .accessibilityLabel(Text(l10n: "home.machines.count"))
+            }
+
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 18) {
                 ForEach(store.machines) { machine in
+                    let status = status(for: machine)
                     MachineCard(
                         machine: machine,
-                        onStart: { onStart(machine) },
+                        status: status,
+                        isBusyElsewhere: status == .otherRunning,
+                        onOpen: { onStart(machine) },
+                        onTerminal: { onTerminal(machine) },
+                        onStop: { stopping = machine },
                         onEditSettings: { editing = machine },
                         onDelete: { deleting = machine })
-                    // At the accessibility text sizes a card grows to fit its text.
-                    .frame(height: typeSize.isAccessibilitySize ? nil : cardHeight)
                 }
             }
-            .scrollTargetLayout()
         }
-        .scrollTargetBehavior(.viewAligned)
-        .onGeometryChange(for: Viewport.self) { proxy in
-            Viewport(proxy)
-        } action: { viewport in
-            fixCardHeight(for: viewport)
+    }
+
+    /// Stops the VM from its card, keeping the same last-screen preview that
+    /// stopping from the VM's own screen does.
+    private func stop(_ machine: Machine) {
+        if let image = runner.display.snapshot() {
+            Task {
+                if await MachinePreview.save(image, to: GuestFiles(for: machine).preview) {
+                    store.previewSaved(machine)
+                }
+            }
         }
-        .contentMargins(.horizontal, 16, for: .scrollContent)
-        .contentMargins(.vertical, 12, for: .scrollContent)
+        runner.stop()
+    }
+
+    /// Derived from the engine's real phase, never assumed.
+    private func status(for machine: Machine) -> MachineStatus {
+        if runner.machineID == machine.id {
+            switch runner.phase {
+            case .starting: return .starting
+            case .running: return .running
+            case .failed(let message): return .failed(message)
+            case .stopped, .idle: return .stopped
+            }
+        }
+        return runner.isRunning ? .otherRunning : .stopped
+    }
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            AuroraRule()
+            HStack(spacing: 6) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(l10n: "home.footer")
+                    .font(AuroraType.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .foregroundStyle(AuroraPalette.textTertiary)
+        }
+        .padding(.top, AuroraSpace.sm)
     }
 }
 
-/// The scroll view's visible height, and the size of the whole screen area it
-/// sits in. Scrolling collapses the large title, which grows the visible
-/// height and shrinks the top inset by the same amount, so the whole stays put
-/// until the screen really changes: rotation, or the Duo folding.
-private struct Viewport: Equatable {
-    let visibleHeight: CGFloat
-    let screen: CGSize
+/// A quiet progress card for an install that is happening while another page
+/// is showing. It reports the installer's own phase and can be opened.
+struct InstallActivityCard: View {
+    @Environment(Installer.self) private var installer
+    let onShowInstall: () -> Void
 
-    init(_ proxy: GeometryProxy) {
-        visibleHeight = proxy.size.height
-        let insets = proxy.safeAreaInsets
-        screen = CGSize(width: proxy.size.width,
-                        height: proxy.size.height + insets.top + insets.bottom)
+    private var progress: Double? {
+        switch installer.phase {
+        case .downloading(let done, let total), .unpacking(let done, let total):
+            return total > 0 ? Double(done) / Double(total) : nil
+        default:
+            return nil
+        }
     }
-}
-
-/// Whether this launch has JIT: a green dot and "JIT" when it does, gray when
-/// it doesn't, a spinner while it's being checked or turned on. Color is never
-/// the only sign: the label says it too.
-struct JITBadge: View {
-    @Environment(JITSession.self) private var jit
-    @ScaledMetric(relativeTo: .subheadline) private var dotSize = 8
 
     var body: some View {
-        HStack(spacing: 6) {
-            if jit.isTurningOn || jit.state == .checking {
-                ProgressView()
-                    .controlSize(.mini)
-            } else {
-                Circle()
-                    .fill(jit.isOn ? AnyShapeStyle(.green) : AnyShapeStyle(.tertiary))
-                    .frame(width: dotSize, height: dotSize)
+        Button(action: onShowInstall) {
+            AuroraCard(tint: AuroraPalette.cyan, padding: AuroraSpace.md) {
+                HStack(spacing: AuroraSpace.md) {
+                    ZStack {
+                        Circle().fill(AuroraPalette.cyan.opacity(0.14)).frame(width: 42, height: 42)
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 19, weight: .semibold))
+                            .foregroundStyle(AuroraPalette.info)
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(verbatim: InstallProgressText.title(for: installer))
+                            .font(AuroraType.headline)
+                            .foregroundStyle(AuroraPalette.textPrimary)
+                            .lineLimit(1)
+                        AuroraProgressBar(value: progress, height: 5)
+                        Text(verbatim: InstallProgressText.detail(for: installer))
+                            .font(AuroraType.caption)
+                            .foregroundStyle(AuroraPalette.textSecondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.forward")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(AuroraPalette.textTertiary)
+                        .auroraDirectional()
+                }
             }
-            Text("JIT")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(jit.isOn ? .primary : .secondary)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(jit.isOn ? "JIT is on" : jit.isTurningOn ? "Turning JIT on" : "JIT is off")
-        .accessibilityHint("Shows JIT settings")
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
     }
 }
 
-/// Home with nothing installed: points at the Install tab.
-struct EmptyHome: View {
-    let onInstall: () -> Void
+/// One place for the installer's human-readable state, shared by Home and
+/// Install.
+@MainActor
+enum InstallProgressText {
+    static func title(for installer: Installer) -> String {
+        let name = installer.image?.name ?? ""
+        switch installer.phase {
+        case .idle: return ""
+        case .downloading: return L10n.format("install.phase.downloading", name)
+        case .unpacking: return L10n.format("install.phase.unpacking", name)
+        case .finishing: return L10n.format("install.phase.finishing", name)
+        case .done(let machine): return L10n.format("install.phase.done", machine.name)
+        case .failed: return L10n.string("install.phase.failed")
+        }
+    }
 
-    var body: some View {
-        ContentUnavailableView {
-            Label("No VMs Yet", systemImage: "shippingbox")
-        } description: {
-            Text("Install Debian or Arch Linux to get started. It downloads once, then runs right on this iPhone.")
-        } actions: {
-            Button(action: onInstall) {
-                Label("Install a VM", systemImage: "arrow.down.circle.fill")
-                    .font(.headline)
-                    .padding(.horizontal, 8)
-            }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .controlSize(.large)
+    static func detail(for installer: Installer) -> String {
+        switch installer.phase {
+        case .idle:
+            return ""
+        case .downloading(let done, let total):
+            return L10n.format("install.phase.progress", Format.bytes(done), Format.bytes(total))
+        case .unpacking(let done, let total):
+            return L10n.format("install.phase.progress", Format.bytes(done), Format.bytes(total))
+        case .finishing:
+            return L10n.string("install.phase.finishingDetail")
+        case .done:
+            return L10n.string("install.phase.doneDetail")
+        case .failed(let message):
+            return message
+        }
+    }
+
+    static func progress(for installer: Installer) -> Double? {
+        switch installer.phase {
+        case .downloading(let done, let total), .unpacking(let done, let total):
+            return total > 0 ? Double(done) / Double(total) : nil
+        default:
+            return nil
         }
     }
 }

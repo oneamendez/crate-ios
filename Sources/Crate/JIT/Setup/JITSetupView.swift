@@ -18,32 +18,26 @@ struct JITSetupView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                pairingSection
-                vpnSection
-                diskImageSection
-                Section {
-                    Button {
-                        dismiss()
-                        Task { await jit.turnOn(.builtInStikJIT) }
-                    } label: {
-                        Label("Turn On JIT", systemImage: "bolt.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.large)
-                    .disabled(!setup.isReady)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
+            ZStack {
+                AuroraBackground()
+                Form {
+                    intro
+                    pairingSection
+                    vpnSection
+                    diskImageSection
+                    turnOnSection
                 }
+                .scrollContentBackground(.hidden)
             }
-            .navigationTitle("Set Up JIT")
+            .navigationTitle(L10n.string("jit.setup.title"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text(l10n: "common.done")
+                    }
                 }
             }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.propertyList, .data, .item]) {
@@ -65,53 +59,116 @@ struct JITSetupView: View {
         }
     }
 
+    private var rowBackground: Color {
+        AuroraPalette.surface.opacity(0.76)
+    }
+
+    private var intro: some View {
+        Section {
+            HStack(alignment: .top, spacing: 14) {
+                CrateMark(size: 48)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(l10n: "jit.setup.hero")
+                        .font(AuroraType.cardTitle)
+                        .foregroundStyle(AuroraPalette.textPrimary)
+                    Text(l10n: "jit.setup.hero.body")
+                        .font(AuroraType.footnote)
+                        .foregroundStyle(AuroraPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .listRowBackground(Color.clear)
+    }
+
     // MARK: - 1. Pairing
 
     private var pairingSection: some View {
         Section {
-            StepStatus(title: "This iPhone", done: setup.hasPairingFile,
-                       status: setup.hasPairingFile ? "Paired" : "Not Paired")
+            StepStatus(titleKey: "jit.thisIPhone", done: setup.hasPairingFile,
+                       status: setup.hasPairingFile ? L10n.string("jit.paired") : L10n.string("jit.notPaired"))
             switch setup.pairing {
             case .idle:
                 if setup.canPairOnDevice {
-                    Button(setup.hasPairingFile ? "Pair Again" : "Pair This iPhone", systemImage: "link") {
+                    Button {
                         setup.startPairing()
+                    } label: {
+                        Label {
+                            Text(l10n: setup.hasPairingFile ? "jit.pairAgain" : "jit.pairThisIPhone")
+                        } icon: {
+                            Image(systemName: "link")
+                        }
                     }
                 }
             case .starting:
                 HStack {
-                    Text("Getting ready to pair…")
+                    Text(l10n: "jit.pairing.starting")
                     Spacer()
                     ProgressView()
                 }
             case .showing(let code, _):
                 pairingInProgress(code: code)
             case .failed(let message):
-                Text(message)
-                    .foregroundStyle(.orange)
-                Button("Try Again", systemImage: "arrow.clockwise") { setup.startPairing() }
-            }
-            Button("Use a Pairing File Instead", systemImage: "doc.badge.plus") { importing = true }
-            if setup.hasPairingFile && setup.pairing == .idle {
-                Button("Forget Pairing", systemImage: "link.badge.minus", role: .destructive) {
-                    confirmingForget = true
+                Text(verbatim: message)
+                    .foregroundStyle(AuroraPalette.danger)
+                Button {
+                    setup.startPairing()
+                } label: {
+                    Label {
+                        Text(l10n: "jit.tryAgain")
+                    } icon: {
+                        Image(systemName: "arrow.clockwise")
+                    }
                 }
-                .confirmationDialog("Forget this iPhone's pairing?", isPresented: $confirmingForget,
-                                    titleVisibility: .visible) {
-                    Button("Forget Pairing", role: .destructive) { setup.forgetPairing() }
+            }
+            Button {
+                importing = true
+            } label: {
+                Label {
+                    Text(l10n: "jit.usePairingFile")
+                } icon: {
+                    Image(systemName: "doc.badge.plus")
+                }
+            }
+            if setup.hasPairingFile && setup.pairing == .idle {
+                Button(role: .destructive) {
+                    confirmingForget = true
+                } label: {
+                    Label {
+                        Text(l10n: "jit.forgetPairing")
+                    } icon: {
+                        Image(systemName: "link.badge.minus")
+                    }
+                }
+                .confirmationDialog(
+                    L10n.string("jit.forget.title"),
+                    isPresented: $confirmingForget,
+                    titleVisibility: .visible
+                ) {
+                    Button(role: .destructive) {
+                        setup.forgetPairing()
+                    } label: {
+                        Text(l10n: "jit.forget.confirm")
+                    }
+                    Button(role: .cancel) {} label: {
+                        Text(l10n: "common.cancel")
+                    }
                 } message: {
-                    Text("Built-in StikJIT can't turn JIT on until crate is paired again. StikDebug doesn't use this pairing.")
+                    Text(l10n: "jit.forget.message")
                 }
             }
             if let importError = setup.importError {
-                Text(importError)
-                    .foregroundStyle(.orange)
+                Text(verbatim: importError)
+                    .foregroundStyle(AuroraPalette.danger)
             }
         } header: {
-            Text("1. Pair")
+            Text(l10n: "jit.step1")
         } footer: {
-            Text(pairingFooter)
+            Text(verbatim: pairingFooter)
+                .foregroundStyle(AuroraPalette.textTertiary)
         }
+        .listRowBackground(rowBackground)
     }
 
     /// The code card, which is also what floats over Settings, kept small,
@@ -120,35 +177,43 @@ struct JITSetupView: View {
     private func pairingInProgress(code: String) -> some View {
         PairingCodeView(pictureInPicture: setup.pictureInPicture)
             .aspectRatio(16 / 9, contentMode: .fit)
-            .frame(maxHeight: 110)
+            .frame(maxHeight: 120)
             .frame(maxWidth: .infinity)
             .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
             .accessibilityElement()
-            .accessibilityLabel("Pairing code \(code.map(String.init).joined(separator: " "))")
+            .accessibilityLabel(Text(verbatim: L10n.format("jit.pairing.codeA11y",
+                                                           code.map(String.init).joined(separator: " "))))
         Button {
             setup.openSettings()
         } label: {
-            Label("Open Settings", systemImage: "gear")
-                .font(.headline)
-                .frame(maxWidth: .infinity)
+            Label {
+                Text(l10n: "jit.openSettings")
+            } icon: {
+                Image(systemName: "gear")
+            }
+            .font(.headline)
+            .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent)
-        .buttonBorderShape(.capsule)
+        .buttonStyle(AuroraPrimaryButtonStyle(fullWidth: true))
         .listRowBackground(Color.clear)
         .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-        Button("Cancel Pairing", role: .cancel) { setup.cancelPairing() }
+        Button(role: .cancel) {
+            setup.cancelPairing()
+        } label: {
+            Text(l10n: "jit.cancelPairing")
+        }
     }
 
     private var pairingFooter: String {
         switch setup.pairing {
         case .showing(let code, true):
-            return "Settings is asking for the code. Type \(PairingCodePictureInPicture.spaced(code)) there, then come back."
+            return L10n.format("jit.pair.footer.settingsCode", PairingCodePictureInPicture.spaced(code))
         case .showing:
-            return "In Settings, go to Privacy & Security, then Developer Mode, tap Pair with crate, and type this code. It stays on screen over Settings."
+            return L10n.string("jit.pair.footer.settings")
         default:
             return setup.canPairOnDevice
-                ? "crate pairs with this iPhone itself, so no computer is needed. A pairing file from StikDebug, idevice_pair or iloader works too."
-                : "Pairing on the iPhone needs iOS 27. Make a pairing file on a computer with idevice_pair or iloader, then pick it here."
+                ? L10n.string("jit.pair.footer.onDevice")
+                : L10n.string("jit.pair.footer.file")
         }
     }
 
@@ -156,32 +221,45 @@ struct JITSetupView: View {
 
     private var vpnSection: some View {
         Section {
-            StepStatus(title: "LocalDevVPN", done: setup.tunnel == .up, status: tunnelStatus)
+            StepStatus(titleKey: "jit.localdevvpn", done: setup.tunnel == .up, status: tunnelStatus)
             if setup.tunnel != .up {
-                Button(LocalDevVPN.isInstalled ? "Connect LocalDevVPN" : "Get LocalDevVPN",
-                       systemImage: "network.badge.shield.half.filled") {
+                Button {
                     setup.connectVPN()
+                } label: {
+                    Label {
+                        Text(l10n: LocalDevVPN.isInstalled ? "jit.connectVPN" : "jit.getVPN")
+                    } icon: {
+                        Image(systemName: "network.badge.shield.half.filled")
+                    }
                 }
             }
-            Button("Check Again", systemImage: "arrow.clockwise") {
+            Button {
                 Task { await setup.checkTunnel() }
+            } label: {
+                Label {
+                    Text(l10n: "jit.checkAgain")
+                } icon: {
+                    Image(systemName: "arrow.clockwise")
+                }
             }
             .disabled(setup.tunnel == nil)
         } header: {
-            Text("2. Connect")
+            Text(l10n: "jit.step2")
         } footer: {
-            Text(setup.tunnel == .localNetworkDenied
-                 ? "crate needs Local Network access to reach LocalDevVPN. Turn it on in Settings > Privacy & Security > Local Network."
-                 : "LocalDevVPN, free on the App Store, lets crate reach this iPhone's own debugging service. Without Wi-Fi, turn on cellular data, connect it, then turn on Airplane Mode.")
+            Text(l10n: setup.tunnel == .localNetworkDenied
+                 ? "jit.vpn.footer.denied"
+                 : "jit.vpn.footer.normal")
+                .foregroundStyle(AuroraPalette.textTertiary)
         }
+        .listRowBackground(rowBackground)
     }
 
     private var tunnelStatus: String {
         switch setup.tunnel {
-        case nil: "Checking…"
-        case .up: "Connected"
-        case .localNetworkDenied: "Local Network Off"
-        case .down: "Not Connected"
+        case nil: L10n.string("jit.tunnel.checking")
+        case .up: L10n.string("jit.tunnel.connected")
+        case .localNetworkDenied: L10n.string("jit.tunnel.localNetworkOff")
+        case .down: L10n.string("jit.tunnel.notConnected")
         }
     }
 
@@ -191,35 +269,76 @@ struct JITSetupView: View {
         Section {
             switch setup.preparation {
             case .idle:
-                StepStatus(title: "Developer Disk Image", done: false, status: "Not Checked")
-                Button("Prepare Now", systemImage: "externaldrive.badge.checkmark") { setup.prepare() }
-                    .disabled(!setup.isReady)
+                StepStatus(titleKey: "jit.deviceDisk", done: false, status: L10n.string("jit.notChecked"))
+                Button {
+                    setup.prepare()
+                } label: {
+                    Label {
+                        Text(l10n: "jit.prepareNow")
+                    } icon: {
+                        Image(systemName: "externaldrive.badge.checkmark")
+                    }
+                }
+                .disabled(!setup.isReady)
             case .working:
                 HStack {
-                    Text("Developer Disk Image")
+                    Text(l10n: "jit.deviceDisk")
                     Spacer()
                     ProgressView()
                 }
             case .ready:
-                StepStatus(title: "Developer Disk Image", done: true, status: "Ready")
+                StepStatus(titleKey: "jit.deviceDisk", done: true, status: L10n.string("jit.ready"))
             case .failed(let message):
-                StepStatus(title: "Developer Disk Image", done: false, status: "Didn't Work")
-                Text(message)
-                    .foregroundStyle(.orange)
-                Button("Try Again", systemImage: "arrow.clockwise") { setup.prepare() }
-                    .disabled(!setup.isReady)
+                StepStatus(titleKey: "jit.deviceDisk", done: false, status: L10n.string("jit.didntWork"))
+                Text(verbatim: message)
+                    .foregroundStyle(AuroraPalette.danger)
+                Button {
+                    setup.prepare()
+                } label: {
+                    Label {
+                        Text(l10n: "jit.tryAgain")
+                    } icon: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+                .disabled(!setup.isReady)
             }
         } header: {
-            Text("3. Prepare")
+            Text(l10n: "jit.step3")
         } footer: {
-            Text("Apple's developer disk image, which turning JIT on mounts by itself. It downloads once and stays mounted until the iPhone restarts. If it keeps failing, restart the iPhone.")
+            Text(l10n: "jit.disk.footer")
+                .foregroundStyle(AuroraPalette.textTertiary)
+        }
+        .listRowBackground(rowBackground)
+    }
+
+    // MARK: - Turn on
+
+    private var turnOnSection: some View {
+        Section {
+            Button {
+                dismiss()
+                Task { await jit.turnOn(.builtInStikJIT) }
+            } label: {
+                Label {
+                    Text(l10n: "jit.turnOn")
+                } icon: {
+                    Image(systemName: "bolt.fill")
+                }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(AuroraPrimaryButtonStyle(fullWidth: true))
+            .disabled(!setup.isReady)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets())
         }
     }
 }
 
 /// A step's name and where it stands, with a check once it's done.
 private struct StepStatus: View {
-    let title: String
+    let titleKey: String
     let done: Bool
     let status: String
 
@@ -228,12 +347,12 @@ private struct StepStatus: View {
             HStack(spacing: 6) {
                 if done {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(AuroraPalette.success)
                 }
-                Text(status)
+                Text(verbatim: status)
             }
         } label: {
-            Text(title)
+            Text(l10n: titleKey)
         }
     }
 }

@@ -22,7 +22,8 @@ final class PairingCodePictureInPicture: NSObject {
     private var controller: AVPictureInPictureController?
     private var refresh: Timer?
     private var silence: AVAudioEngine?
-    private var text = (title: "Pair with crate", code: "", note: "Privacy & Security › Developer Mode")
+    private var text = (title: L10n.string("pair.pip.title"), code: "",
+                        note: L10n.string("pair.pip.location"))
 
     /// The 16:9 frame size drawn, in pixels.
     private static let size = CGSize(width: 960, height: 540)
@@ -70,8 +71,8 @@ final class PairingCodePictureInPicture: NSObject {
     /// The code, with where to find "Pair with crate" until Settings has
     /// connected and is asking for it.
     func show(code: String, connected: Bool) {
-        text = ("Pair with crate", Self.spaced(code),
-                connected ? "Type this code in Settings" : "Privacy & Security › Developer Mode")
+        text = (L10n.string("pair.pip.title"), Self.spaced(code),
+                connected ? L10n.string("pair.pip.connectedNote") : L10n.string("pair.pip.location"))
         draw()
     }
 
@@ -82,8 +83,9 @@ final class PairingCodePictureInPicture: NSObject {
         silence?.stop()
         silence = nil
         controller?.canStartPictureInPictureAutomaticallyFromInline = false
-        text = paired ? ("crate", "Paired", "Return to crate to finish")
-                      : ("crate", "Not Paired", "Return to crate to try again")
+        text = paired
+            ? ("crate", L10n.string("pair.pip.paired"), L10n.string("pair.pip.returnFinish"))
+            : ("crate", L10n.string("pair.pip.notPaired"), L10n.string("pair.pip.returnRetry"))
         draw()
     }
 
@@ -149,6 +151,8 @@ final class PairingCodePictureInPicture: NSObject {
             context.fill(CGRect(origin: .zero, size: size))
             let centered = NSMutableParagraphStyle()
             centered.alignment = .center
+            centered.baseWritingDirection = L10n.isRightToLeft(languageCode: L10n.languageCode)
+                ? .rightToLeft : .leftToRight
             func line(_ string: String, font: UIFont, color: UIColor, y: CGFloat) {
                 (string as NSString).draw(
                     in: CGRect(x: 0, y: y, width: size.width, height: font.lineHeight * 1.2),

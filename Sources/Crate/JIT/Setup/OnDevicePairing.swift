@@ -80,25 +80,25 @@ final class OnDevicePairing: NSObject, @unchecked Sendable {
         var txtLength: UInt = 0
         if let message = consume(pairable_host_prepare("crate", nil, false, &host, &serviceID,
                                                        &txtBytes, &txtLength, nil)) {
-            return .failed("crate couldn't get ready to pair (\(message)).")
+            return .failed(L10n.format("pairing.error.prepare", message))
         }
         defer { pairable_host_free(host) }
         let name = serviceID.map { String(cString: $0) } ?? "crate"
         idevice_string_free(serviceID)
         let code = String(format: "%06d", Int.random(in: 0..<1_000_000))
         if let message = consume(pairable_host_set_setup_code(host, code)) {
-            return .failed("crate couldn't set the pairing code (\(message)).")
+            return .failed(L10n.format("pairing.error.code", message))
         }
         let txt = txtBytes.map { Data(bytes: $0, count: Int(txtLength)) } ?? Data()
         idevice_data_free(txtBytes, txtLength)
         guard let records = Self.txtRecords(fromPlist: txt) else {
-            return .failed("crate made pairing details iOS can't read.")
+            return .failed(L10n.string("pairing.error.details"))
         }
 
         // Where iOS connects: any address, a port the system picks.
         let (socket, port) = Self.listen()
         guard socket >= 0 else {
-            return .failed("crate couldn't open a port for pairing (\(String(cString: strerror(errno)))).")
+            return .failed(L10n.format("pairing.error.port", String(cString: strerror(errno))))
         }
         lock.withLock { listener = socket }
         defer {
@@ -114,9 +114,9 @@ final class OnDevicePairing: NSObject, @unchecked Sendable {
         let deadline = Date.now.addingTimeInterval(Self.timeout)
         var connection: Int32 = -1
         while connection < 0 {
-            if isCancelled { return .failed("Pairing was cancelled.") }
+            if isCancelled { return .failed(L10n.string("pairing.error.cancelled")) }
             if Date.now > deadline {
-                return .failed("Settings didn't connect within \(Int(Self.timeout / 60)) minutes. Try again.")
+                return .failed(L10n.format("pairing.error.noConnection", "\(Int(Self.timeout / 60))"))
             }
             var poller = pollfd(fd: socket, events: Int16(POLLIN), revents: 0)
             guard poll(&poller, 1, 500) > 0 else { continue }
@@ -144,20 +144,20 @@ final class OnDevicePairing: NSObject, @unchecked Sendable {
         let result = consume(pairable_host_accept_fd(host, connection, callback, context.toOpaque(),
                                                      nil, &pairingFile))
         AppLog.write("jit: pairing: idevice returned \(result ?? "success")")
-        if isCancelled { return .failed("Pairing was cancelled.") }
+        if isCancelled { return .failed(L10n.string("pairing.error.cancelled")) }
         if let message = result {
-            return .failed("Pairing didn't finish (\(message)). Try again, and type the code in Settings.")
+            return .failed(L10n.format("pairing.error.finish", message))
         }
         defer { rp_pairing_file_free(pairingFile) }
 
         var bytes: UnsafeMutablePointer<UInt8>?
         var length: UInt = 0
         if let message = consume(rp_pairing_file_to_bytes(pairingFile, &bytes, &length)) {
-            return .failed("crate couldn't keep the pairing (\(message)).")
+            return .failed(L10n.format("pairing.error.keep", message))
         }
         let record = bytes.map { Data(bytes: $0, count: Int(length)) } ?? Data()
         idevice_data_free(bytes, length)
-        return record.isEmpty ? .failed("Pairing finished without a pairing record.") : .paired(record)
+        return record.isEmpty ? .failed(L10n.string("pairing.error.noRecord")) : .paired(record)
     }
 
     /// idevice's own log of each pairing message, at Library/Caches/idevice.log,
@@ -241,7 +241,7 @@ final class OnDevicePairing: NSObject, @unchecked Sendable {
             service.publish()
         }
         if published.wait(timeout: .now() + 10) == .timedOut {
-            return "iOS didn't start advertising crate for pairing. Allow Local Network for crate in Settings, then try again."
+            return L10n.string("pairing.error.advertise")
         }
         return problem
     }
@@ -275,8 +275,8 @@ private final class PublishWatcher: NSObject, NetServiceDelegate {
         let code = errorDict[NetService.errorCode]?.intValue ?? 0
         // -72008 is "no permission": Local Network is off for crate.
         report?(code == -72008
-                ? "crate needs Local Network access to pair. Allow it in Settings > Privacy & Security > Local Network, then try again."
-                : "iOS wouldn't advertise crate for pairing (error \(code)).")
+                ? L10n.string("pairing.error.localNetwork")
+                : L10n.format("pairing.error.advertiseCode", "\(code)"))
         report = nil
     }
 }

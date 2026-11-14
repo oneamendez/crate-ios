@@ -1,6 +1,7 @@
 name: Crate
 options:
   bundleIdPrefix: com.amendez
+  developmentLanguage: en
   deploymentTarget:
     iOS: "18.0"
   createIntermediateGroups: true
@@ -32,9 +33,14 @@ targets:
     info:
       path: Resources/Info.plist
       properties:
-        CFBundleDisplayName: crate
+        CFBundleDisplayName: Crate
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        CFBundleLocalizations:
+          - en
+          - ar
+          - zh-Hans
+          - fr
         # The system's grouped background, as Home's, so launch doesn't flash
         # white before the first screen (HIG: Launching).
         UILaunchScreen:
@@ -125,8 +131,8 @@ targets:
         DEVELOPMENT_TEAM: L29MY952CB
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY[sdk=iphoneos*]: Apple Development
-        MARKETING_VERSION: "0.1.3"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "5"
         SWIFT_VERSION: "5.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # The code region is claimed in C (a `brk` with arguments in x0 and x1).
@@ -141,6 +147,10 @@ targets:
         CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]: NO
         # idevice is built for Apple silicon Simulators only.
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+      configs:
+        Debug:
+          # CrateTests uses `@testable import Crate`.
+          ENABLE_TESTABILITY: YES
 
   # Built-in StikJIT: the second process that attaches a debugger to crate (see
   # CrateJITHelper.swift). StikJIT has no Simulator slice, so it's linked and
@@ -187,8 +197,8 @@ targets:
         DEVELOPMENT_TEAM: L29MY952CB
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY[sdk=iphoneos*]: Apple Development
-        MARKETING_VERSION: "0.1.3"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "0.2.0"
+        CURRENT_PROJECT_VERSION: "5"
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -199,3 +209,39 @@ targets:
         CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: NO
         CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]: NO
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+
+  # Aurora Edition's checks: localisation completeness and formatting. Hosted
+  # in the app so it can read the app's own .lproj bundles.
+  CrateTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/CrateTests
+    dependencies:
+      - target: Crate
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.amendez.crate.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Crate.app/Crate"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: NO
+        CODE_SIGNING_REQUIRED[sdk=iphonesimulator*]: NO
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+
+schemes:
+  Crate:
+    build:
+      targets:
+        Crate: all
+        CrateTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - name: CrateTests
+    archive:
+      config: Release

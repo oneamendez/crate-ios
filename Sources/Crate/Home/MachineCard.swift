@@ -4,177 +4,330 @@
 
 import SwiftUI
 
-/// One installed VM: its screenshot, what it is, how it's configured, and Start.
-///
-/// Tall cards stack the screenshot over the details; a card wider than it is
-/// tall (landscape, or the Duo opened flat) puts them side by side.
+/// One installed VM on the dashboard. The preview carries the distribution's
+/// colour; everything below it is live state from the store and the engine.
 struct MachineCard: View {
     let machine: Machine
-    let onStart: () -> Void
+    let status: MachineStatus
+    let isBusyElsewhere: Bool
+    let onOpen: () -> Void
+    let onTerminal: () -> Void
+    let onStop: () -> Void
     let onEditSettings: () -> Void
     let onDelete: () -> Void
 
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// The only setting so far is iPhone Duo's.
-    @Environment(\.hasHinge) private var hasHinge
+    @Environment(\.colorScheme) private var colorScheme
+
+    private let shape = RoundedRectangle(cornerRadius: AuroraRadius.card, style: .continuous)
+
+    private var previewHeight: CGFloat {
+        typeSize.isAccessibilitySize ? 150 : 188
+    }
+
+    private var primaryKey: String {
+        switch status {
+        case .running: "machine.open"
+        case .starting: "machine.viewStartup"
+        case .failed: "machine.viewError"
+        case .otherRunning: "machine.busy"
+        case .stopped: "machine.start"
+        }
+    }
+
+    private var primaryIcon: String {
+        switch status {
+        case .running: "display"
+        case .starting: "hourglass"
+        case .failed: "exclamationmark.triangle"
+        case .otherRunning: "hourglass"
+        case .stopped: "play.fill"
+        }
+    }
 
     var body: some View {
-        Group {
-            if typeSize.isAccessibilitySize {
-                // At the accessibility text sizes the card grows to fit its text
-                // (HomeScreen stops fixing its height): held to 75% of the
-                // screen, the details would crush the screenshot and spill out.
-                VStack(spacing: 14) {
-                    screenshot
-                        .aspectRatio(16 / 10, contentMode: .fit)
-                    details(specs: MachineSpecs(machine: machine), wide: false)
-                }
-                .padding(14)
-            } else {
-                sized
-            }
+        VStack(spacing: 0) {
+            preview
+            details
         }
-        // Secondary on the page's primary grouped background, as the HIG's
-        // colour hierarchy has it.
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-    }
-
-    private var screenshot: some View {
-        MachineScreenshot(machine: machine)
-    }
-
-    /// The card at the size HomeScreen gives it.
-    private var sized: some View {
-        GeometryReader { geometry in
-            let wide = geometry.size.width > geometry.size.height * 1.25
-            let layout = wide
-                ? AnyLayout(HStackLayout(alignment: .top, spacing: 16))
-                : AnyLayout(VStackLayout(spacing: 14))
-            layout {
-                screenshot
-                    .frame(maxWidth: wide ? geometry.size.width * 0.48 : .infinity)
-                if wide {
-                    // Landscape on the closed Duo leaves the details about 200 pt,
-                    // too short for the whole grid; it then shrinks to one row,
-                    // and failing that to one line of figures.
-                    ViewThatFits(in: .vertical) {
-                        details(specs: MachineSpecs(machine: machine), wide: true)
-                        details(specs: MachineSpecs(machine: machine, rows: 1), wide: true)
-                        details(specs: MachineSpecLine(machine: machine), wide: true)
-                    }
-                } else {
-                    details(specs: MachineSpecs(machine: machine), wide: false)
+        .background {
+            shape
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    shape.fill(LinearGradient(
+                        colors: [machine.auroraTint.opacity(colorScheme == .dark ? 0.10 : 0.055),
+                                 Color.white.opacity(colorScheme == .dark ? 0.025 : 0.26),
+                                 .clear],
+                        startPoint: .topLeading, endPoint: .bottomTrailing))
                 }
-            }
-            .padding(14)
-        }
-    }
-
-    /// Side by side, Start sits at the bottom of the details column; stacked,
-    /// the screenshot above takes all the spare height instead.
-    private func details(specs: some View, wide: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            specs
-            if wide {
-                Spacer(minLength: 0)
-            }
-            Button(action: onStart) {
-                Label("Start", systemImage: "play.fill")
-                    .font(.title3.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .controlSize(.large)
-        }
-    }
-
-    /// Name and version, and the More menu. At the accessibility text sizes the
-    /// version goes under the name, which shares its row only with the menu.
-    @ViewBuilder
-    private var header: some View {
-        if typeSize.isAccessibilitySize {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top) {
-                    Text(machine.name)
-                        .font(.title2.bold())
-                    Spacer(minLength: 0)
-                    moreMenu
+                .overlay {
+                    shape.strokeBorder(LinearGradient(
+                        colors: [Color.white.opacity(colorScheme == .dark ? 0.18 : 0.55),
+                                 machine.auroraTint.opacity(0.20),
+                                 AuroraPalette.hairline],
+                        startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
                 }
-                Text("\(machine.versionLabel) · \(machine.distribution.family.title)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        } else {
-            HStack(spacing: 12) {
-                // The version beside the name when there's room, under it when not.
-                ViewThatFits(in: .horizontal) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(machine.name)
-                                .font(.title2.bold())
-                            Text(machine.versionLabel)
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
+        }
+        .clipShape(shape)
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.30 : 0.10),
+                radius: 22, y: 12)
+        .accessibilityElement(children: .contain)
+    }
+
+    // MARK: - Preview
+
+    private var preview: some View {
+        ZStack(alignment: .bottomLeading) {
+            MachineScreenshot(machine: machine)
+                .frame(height: previewHeight)
+                .frame(maxWidth: .infinity)
+                .clipped()
+
+            LinearGradient(colors: [.black.opacity(0.02), .clear, .black.opacity(0.62)],
+                           startPoint: .top, endPoint: .bottom)
+                .allowsHitTesting(false)
+
+            VStack {
+                HStack(alignment: .top, spacing: AuroraSpace.sm) {
+                    AuroraGlassPill {
+                        HStack(spacing: 6) {
+                            DistributionBadge(distribution: machine.distribution, size: 22)
+                            Text(verbatim: machine.distribution.name)
+                                .font(.system(.caption, design: .default, weight: .semibold))
+                                .foregroundStyle(.white)
                         }
-                        Text("\(machine.distribution.family.title) · \(machine.architecture)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(machine.name)
-                            .font(.title2.bold())
-                            .minimumScaleFactor(0.7)
-                        Text("\(machine.versionLabel) · \(machine.distribution.family.title)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
+                    Spacer(minLength: 0)
+                    AuroraStatusPill(status: status)
+                        .padding(3)
+                        .background(.ultraThinMaterial, in: Capsule())
                 }
-                .lineLimit(1)
+                Spacer(minLength: 0)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(verbatim: machine.name)
+                        .font(.system(.title2, design: .default, weight: .bold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .shadow(color: .black.opacity(0.35), radius: 6, y: 1)
+                    Spacer(minLength: 0)
+                    Text(verbatim: machine.versionLabel)
+                        .font(.system(.footnote, design: .monospaced, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.78))
+                        .lineLimit(1)
+                        .environment(\.layoutDirection, .leftToRight)
+                }
+            }
+            .padding(16)
+            // The preview is always a dark surface, so its glass and status
+            // colours keep their dark-theme contrast even in Light mode.
+            .environment(\.colorScheme, .dark)
+        }
+        .frame(height: previewHeight)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: L10n.format("machine.card.a11y", machine.name)))
+    }
+
+    // MARK: - Details
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(verbatim: machine.name)
+                        .font(AuroraType.cardTitle)
+                        .foregroundStyle(AuroraPalette.textPrimary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.78)
+                    systemLine
+                }
                 Spacer(minLength: 0)
                 moreMenu
+            }
+
+            if case .failed(let message) = status {
+                errorLine(message)
+            }
+            if case .otherRunning = status {
+                Label {
+                    Text(l10n: "machine.otherRunning")
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "hourglass")
+                }
+                .font(AuroraType.footnote)
+                .foregroundStyle(AuroraPalette.warning)
+            }
+
+            specs
+
+            if status == .running {
+                HostMemoryLine()
+            }
+
+            actions
+        }
+        .padding(AuroraSpace.lg)
+    }
+
+    private var systemLine: some View {
+        HStack(spacing: 5) {
+            Text(l10n: machine.distribution.family.titleKey)
+            Text(verbatim: "·")
+            Text(verbatim: machine.desktop)
+                .environment(\.layoutDirection, .leftToRight)
+            Text(verbatim: "·")
+            Text(verbatim: machine.architecture)
+                .environment(\.layoutDirection, .leftToRight)
+        }
+        .font(AuroraType.subheadline)
+        .foregroundStyle(AuroraPalette.textSecondary)
+        .lineLimit(1)
+        .minimumScaleFactor(0.78)
+    }
+
+    private var specs: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 12, alignment: .leading),
+                            GridItem(.flexible(), spacing: 12, alignment: .leading)],
+                  alignment: .leading, spacing: 12) {
+            AuroraMetricTile(titleKey: "machine.cpu",
+                             value: Self.cores(machine.cpuCount),
+                             systemImage: "cpu")
+            AuroraMetricTile(titleKey: "machine.memory",
+                             value: Format.memory(UInt64(machine.memoryGB) << 30),
+                             systemImage: "memorychip")
+            AuroraMetricTile(titleKey: "machine.storage",
+                             value: L10n.format("machine.storage.value",
+                                                Format.bytes(Int64(machine.diskUsedGB * 1e9)),
+                                                "\(machine.diskGB) GB"),
+                             systemImage: "internaldrive")
+            AuroraMetricTile(titleKey: "machine.desktop",
+                             value: machine.desktop,
+                             systemImage: "macwindow",
+                             isTechnical: true,
+                             accent: machine.auroraTint)
+            AuroraMetricTile(titleKey: "machine.display",
+                             value: machine.display,
+                             systemImage: "display",
+                             isTechnical: true)
+            AuroraMetricTile(titleKey: "machine.lastUsed",
+                             value: Format.relative(machine.lastStarted),
+                             systemImage: "clock")
+        }
+    }
+
+    private static func cores(_ count: Int) -> String {
+        count == 1 ? L10n.string("machine.core.one") : L10n.format("machine.core.many", "\(count)")
+    }
+
+    private func errorLine(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(AuroraPalette.danger)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(l10n: "machine.error.title")
+                    .font(AuroraType.caption.weight(.semibold))
+                    .foregroundStyle(AuroraPalette.danger)
+                Text(verbatim: message)
+                    .font(AuroraType.footnote)
+                    .foregroundStyle(AuroraPalette.textSecondary)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AuroraPalette.danger.opacity(0.09),
+                    in: RoundedRectangle(cornerRadius: AuroraRadius.small, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AuroraRadius.small, style: .continuous)
+                .strokeBorder(AuroraPalette.danger.opacity(0.18), lineWidth: 1)
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 9) {
+            Button(action: onOpen) {
+                Label {
+                    Text(l10n: primaryKey)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                } icon: {
+                    Image(systemName: primaryIcon)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(AuroraPrimaryButtonStyle(fullWidth: true))
+            .disabled(isBusyElsewhere)
+
+            Button(action: onTerminal) {
+                Image(systemName: "apple.terminal")
+            }
+            .buttonStyle(AuroraIconButtonStyle(size: 48))
+            .disabled(isBusyElsewhere)
+            .accessibilityLabel(Text(l10n: "machine.terminal.a11y"))
+
+            if status == .running || status == .starting {
+                Button(action: onStop) {
+                    Image(systemName: "stop.fill")
+                }
+                .buttonStyle(AuroraIconButtonStyle(size: 48))
+                .accessibilityLabel(Text(l10n: "machine.stop.a11y"))
             }
         }
     }
 
     private var moreMenu: some View {
         Menu {
-            Button("Edit Settings…", systemImage: "slider.horizontal.3", action: onEditSettings)
-                .disabled(!hasHinge)
+            Button(action: onEditSettings) {
+                Label {
+                    Text(l10n: "machine.edit")
+                } icon: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+            }
+            if status == .running || status == .starting {
+                Button(role: .destructive, action: onStop) {
+                    Label {
+                        Text(l10n: "machine.stop")
+                    } icon: {
+                        Image(systemName: "stop.fill")
+                    }
+                }
+            }
             Divider()
-            Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
+            Button(role: .destructive, action: onDelete) {
+                Label {
+                    Text(l10n: "machine.delete")
+                } icon: {
+                    Image(systemName: "trash")
+                }
+            }
         } label: {
-            // Monochrome: the card's screenshot is colourful enough, and the
-            // accent colour is kept for Start.
             Image(systemName: "ellipsis")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.primary)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(AuroraPalette.textPrimary)
                 .frame(width: 44, height: 44)
-                .background(.fill.tertiary, in: Circle())
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(AuroraPalette.hairline, lineWidth: 1))
         }
-        .tint(.primary)
-        // A control, not content: it stays a control's size at the largest
-        // text sizes, as tab titles do.
-        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-        .accessibilityLabel("More")
+        .tint(AuroraPalette.textPrimary)
+        .accessibilityLabel(Text(l10n: "machine.more"))
     }
 }
 
-/// The VM's last screen, or a stand-in before it has one.
+/// The VM's last screen, or a composed placeholder before it has one.
 struct MachineScreenshot: View {
     let machine: Machine
 
-    /// Its screen as it was last stopped (MachinePreview), once there is one.
     @State private var preview: UIImage?
 
     var body: some View {
-        // The colour sets the size and the image fills it, so a screenshot of any
-        // shape crops to the card instead of resizing it.
         Rectangle()
-            .fill(machine.distribution.color.gradient.opacity(0.35))
+            .fill(machine.auroraGradient)
+            .opacity(0.38)
             .overlay {
                 if let preview {
                     Image(uiImage: preview)
@@ -185,93 +338,55 @@ struct MachineScreenshot: View {
                         .resizable()
                         .scaledToFill()
                 } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "display")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
-                        Text("No screenshot yet")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+                    placeholder
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .accessibilityLabel("\(machine.name) screenshot")
-            // Again each time a stop saves a new one.
             .task(id: machine.previewDate) {
                 guard machine.previewDate != nil else { return }
                 preview = await MachinePreview.load(GuestFiles(for: machine).preview)
             }
-    }
-}
-
-/// The VM's configuration as a grid of small tiles.
-struct MachineSpecs: View {
-    let machine: Machine
-    /// One row is CPUs, memory and disk; two add desktop, display and last used.
-    var rows = 2
-
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    /// Three across, or two at the accessibility text sizes, where three
-    /// columns would truncate every value.
-    private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .leading),
-              count: typeSize.isAccessibilitySize ? 2 : 3)
+            .accessibilityLabel(Text(verbatim: L10n.format("machine.screenshot.a11y", machine.name)))
     }
 
-    var body: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
-            SpecTile(title: "CPUs", systemImage: "cpu", value: "\(machine.cpuCount) cores")
-            SpecTile(title: "Memory", systemImage: "memorychip", value: "\(machine.memoryGB) GB")
-            SpecTile(title: "Disk", systemImage: "internaldrive",
-                     value: "\(machine.diskUsedGB.formatted(.number.precision(.fractionLength(1)))) of \(machine.diskGB) GB")
-            if rows > 1 {
-                SpecTile(title: "Desktop", systemImage: "macwindow", value: machine.desktop)
-                SpecTile(title: "Display", systemImage: "display", value: machine.display)
-                SpecTile(title: "Last used", systemImage: "clock", value: Format.relative(machine.lastStarted))
+    private var placeholder: some View {
+        ZStack {
+            Rectangle()
+                .fill(machine.auroraGradient)
+                .opacity(0.34)
+            VStack(spacing: 10) {
+                DistributionBadge(distribution: machine.distribution, size: 62)
+                Text(l10n: "machine.noScreenshot")
+                    .font(AuroraType.footnote)
+                    .foregroundStyle(.white.opacity(0.82))
             }
         }
     }
 }
 
-/// The figures on one line, for a card too short for ``MachineSpecs``.
-struct MachineSpecLine: View {
-    let machine: Machine
-
+/// The process's real memory footprint, refreshed while the VM runs. It is
+/// labelled as crate's memory, not presented as guest usage that iOS does not
+/// expose.
+struct HostMemoryLine: View {
     var body: some View {
-        Text("\(Image(systemName: "cpu")) \(machine.cpuCount)   \(Image(systemName: "memorychip")) \(machine.memoryGB) GB   \(Image(systemName: "internaldrive")) \(machine.diskGB) GB   \(Image(systemName: "macwindow")) \(machine.desktop)")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .lineLimit(2)
-    }
-}
-
-struct SpecTile: View {
-    let title: String
-    let systemImage: String
-    let value: String
-
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            // Just the icon when the tile is too narrow for its title.
-            ViewThatFits(in: .horizontal) {
-                Label(title, systemImage: systemImage)
-                Image(systemName: systemImage)
+        TimelineView(.periodic(from: .now, by: 5)) { _ in
+            let report = MemoryReport()
+            if let limit = report.limit, limit > 0 {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text(l10n: "machine.appMemory")
+                            .font(AuroraType.caption)
+                            .foregroundStyle(AuroraPalette.textSecondary)
+                        Spacer(minLength: 0)
+                        Text(verbatim: L10n.format("machine.appMemory.value",
+                                                   Format.memory(report.footprint, decimals: 1),
+                                                   Format.memory(limit, decimals: 1)))
+                            .font(.system(.caption, design: .monospaced, weight: .medium))
+                            .foregroundStyle(AuroraPalette.textTertiary)
+                            .environment(\.layoutDirection, .leftToRight)
+                    }
+                    AuroraProgressBar(value: min(1, Double(report.footprint) / Double(limit)), height: 4)
+                }
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            Text(value)
-                .font(.footnote.weight(.semibold))
-                .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
-                .minimumScaleFactor(0.75)
         }
-        // No box of its own: the card is the box, and the HIG groups within
-        // one by alignment and spacing rather than boxes inside it.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
     }
 }

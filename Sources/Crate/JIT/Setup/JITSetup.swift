@@ -118,7 +118,7 @@ final class JITSetup {
                 guard let self, case .showing(_, true) = self.pairing else { return }
                 AppLog.write("jit: pairing: no answer from Settings in 3 minutes")
                 self.cancelPairing()
-                self.pairing = .failed("Settings stopped answering before pairing finished. Try again.")
+                self.pairing = .failed(L10n.string("jit.pairing.timeout"))
             }
         case .paired(let record):
             finishPairing(paired: true)
@@ -128,7 +128,7 @@ final class JITSetup {
                 pairing = .idle
                 preparation = .idle
             } catch {
-                pairing = .failed("crate couldn't save the pairing (\(error.localizedDescription)).")
+                pairing = .failed(L10n.format("jit.pairing.saveFailed", error.localizedDescription))
             }
         case .failed(let message):
             finishPairing(paired: false)

@@ -30,9 +30,9 @@ extension JITSession {
         let timeout: Duration = method == .builtInStikJIT ? .seconds(300) : .seconds(120)
         guard await waitForDebugger(upTo: timeout) else {
             if let helperFailure {
-                fail("Built-in StikJIT didn't work: \(helperFailure)")
+                fail(L10n.format("jit.error.helperFailed", helperFailure))
             } else {
-                fail("\(method.title) didn't attach to crate. Check that it's set up, then try again.")
+                fail(L10n.format("jit.error.didntAttach", method.title))
             }
             return
         }
@@ -53,7 +53,7 @@ extension JITSession {
             URLQueryItem(name: "script-name", value: "legacy.js"),
         ]
         guard let target = url.url, await UIApplication.shared.open(target) else {
-            fail("StikDebug isn't installed. Install it, or choose Built-in StikJIT.")
+            fail(L10n.string("jit.error.stikDebugMissing"))
             return false
         }
         AppLog.write("jit: opened \(target.absoluteString)")
@@ -65,7 +65,7 @@ extension JITSession {
     /// detached, or early with what stopped it, which ends the wait.
     private func askBuiltIn(interactive: Bool) async -> Bool {
         if getenv("LC_HOME_PATH") != nil {
-            fail("Built-in StikJIT can't run inside LiveContainer, which can't start crate's helper. Choose StikDebug.")
+            fail(L10n.string("jit.error.liveContainer"))
             return false
         }
         guard let pairing = PairingFile.read() else {

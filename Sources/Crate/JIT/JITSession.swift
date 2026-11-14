@@ -53,9 +53,9 @@ final class JITSession {
         if let enablerError { return enablerError }
         switch state {
         case .off(.debuggerLeft):
-            return "A debugger turned JIT on but left without authorizing crate's code region. If it was StikDebug, choose the legacy.js script for crate in StikDebug."
+            return L10n.string("jit.problem.debuggerLeft")
         case .off(.notEligible):
-            return "This copy of crate can't use JIT: it wasn't signed for development, so nothing can attach to it."
+            return L10n.string("jit.problem.notEligible")
         case .failed(let message):
             return message
         case .checking, .on, .off(.noDebugger):
@@ -137,7 +137,7 @@ final class JITSession {
         if defaults.bool(forKey: claimingKey) {
             defaults.set(false, forKey: claimingKey)
             AppLog.write("jit: the last launch died claiming its code region; not trying again")
-            return (.failed("crate closed while claiming its code region last time, so this launch skipped it. Turn JIT on again to retry."), nil)
+            return (.failed(L10n.string("jit.error.previousCrash")), nil)
         }
         defaults.set(true, forKey: claimingKey)
         defaults.synchronize()
@@ -155,8 +155,8 @@ final class JITSession {
             AppLog.write("jit: no room for \(sizeMB) MB below 64 GiB: iOS first offered "
                          + "\(String(crate_code_region_first_offer, radix: 16)), largest gap \(crate_code_region_largest_gap >> 20) MiB")
             return failure(needsAuthorization
-                ? "iOS wouldn't map \(sizeMB) MB for code low enough for the debugger to authorize (\(errorText)). Close crate and open it again to retry."
-                : "iOS wouldn't map \(sizeMB) MB for code (\(errorText)). Try a smaller code region.")
+                ? L10n.format("jit.error.mapLow", "\(sizeMB)", errorText)
+                : L10n.format("jit.error.map", "\(sizeMB)", errorText))
         }
         let claimedMB = region.size >> 20
         if claimedMB < sizeMB {
@@ -173,15 +173,15 @@ final class JITSession {
         case CRATE_REGION_OK:
             break
         case CRATE_REGION_REFUSED:
-            return failure("The debugger refused to authorize crate's code region. If it's StikDebug, choose the legacy.js script for crate.")
+            return failure(L10n.string("jit.error.refused"))
         case CRATE_REGION_REMAP_FAILED:
-            return failure("iOS wouldn't map the code region a second time for writing.")
+            return failure(L10n.string("jit.error.remap"))
         default:
-            return failure("iOS wouldn't make the code region writable (\(errorText)).")
+            return failure(L10n.format("jit.error.writable", errorText))
         }
         let seconds = Date.now.timeIntervalSince(started)
         guard crate_code_region_test(&region) else {
-            return failure("Code written into the region didn't run correctly.")
+            return failure(L10n.string("jit.error.test"))
         }
         AppLog.write("jit: on, \(claimedMB) MB claimed and tested in \(String(format: "%.2f", seconds)) s, "
                      + "code at \(String(UInt(bitPattern: region.executable), radix: 16)), "

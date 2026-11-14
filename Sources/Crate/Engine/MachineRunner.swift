@@ -69,12 +69,12 @@ final class MachineRunner {
         }
         let files = GuestFiles(for: vm)
         if !files.missing.isEmpty {
-            phase = .failed("\(vm.name)'s files aren't on this iPhone yet (\(files.missing.joined(separator: ", "))).")
+            phase = .failed(L10n.format("vm.error.filesMissing", vm.name, files.missing.joined(separator: ", ")))
             return
         }
         // The guest writes to its disk; a copy crate can't write is useless to it.
         if !FileManager.default.isWritableFile(atPath: files.disk.path) {
-            phase = .failed("crate can't write to \(vm.name)'s disk, so the VM can't use it. It needs to be put on this iPhone again.")
+            phase = .failed(L10n.format("vm.error.notWritable", vm.name))
             AppLog.write("vm: \(files.disk.path) isn't writable")
             return
         }
@@ -104,7 +104,7 @@ final class MachineRunner {
                         self.debugHooks.start(console: console, display: display)
                         #endif
                     } else {
-                        self.phase = .failed("crate couldn't start the VM: \(String(cString: crate_last_error())).")
+                        self.phase = .failed(L10n.format("vm.error.startFailed", String(cString: crate_last_error())))
                     }
                 case .failure(let message):
                     AppLog.write("vm: \(message)")
@@ -212,68 +212,80 @@ final class MachineRunner {
     nonisolated private static func create(_ settings: Settings, region: crate_code_region,
                                            console: ConsoleBridge, display: DisplayBridge,
                                            context: UnsafeMutableRawPointer) -> Created {
-        guard let config = crate_config_new("virt") else { return .failure("crate doesn't know the virt board.") }
+        guard let config = crate_config_new("virt") else {
+            return .failure(L10n.string("vm.error.noBoard"))
+        }
         defer { crate_config_free(config) }
         func check(_ status: crate_status, _ what: String) -> String? {
-            status == CRATE_OK ? nil : "crate refused \(what): \(String(cString: crate_last_error()))."
+            status == CRATE_OK ? nil : L10n.format("vm.error.refused", what, String(cString: crate_last_error()))
         }
         let steps: [() -> String?] = [
-            { check(crate_config_set_cpu_backend(config, CRATE_CPU_JIT), "the CPU backend") },
-            { check(crate_config_set_cpus(config, UInt32(settings.cpus)), "\(settings.cpus) CPUs") },
-            { check(crate_config_set_memory(config, UInt64(settings.memoryMiB) << 20), "\(settings.memoryMiB) MiB of memory") },
-            { check(crate_config_set_jit_region(config, region.executable, region.writable, region.size), "the code region") },
-            { check(crate_config_set_kernel(config, settings.kernel), "the kernel") },
-            { check(crate_config_set_initrd(config, settings.initrd), "the initrd") },
-            { check(crate_config_set_cmdline(config, settings.commandLine), "the kernel command line") },
-            { check(crate_config_add_disk(config, settings.disk, 0), "the disk") },
+            { check(crate_config_set_cpu_backend(config, CRATE_CPU_JIT), L10n.string("vm.config.cpuBackend")) },
+            { check(crate_config_set_cpus(config, UInt32(settings.cpus)),
+                    L10n.format("vm.config.cpus", "\(settings.cpus)")) },
+            { check(crate_config_set_memory(config, UInt64(settings.memoryMiB) << 20),
+                    L10n.format("vm.config.memory", "\(settings.memoryMiB)")) },
+            { check(crate_config_set_jit_region(config, region.executable, region.writable, region.size),
+                    L10n.string("vm.config.codeRegion")) },
+            { check(crate_config_set_kernel(config, settings.kernel), L10n.string("vm.config.kernel")) },
+            { check(crate_config_set_initrd(config, settings.initrd), L10n.string("vm.config.initrd")) },
+            { check(crate_config_set_cmdline(config, settings.commandLine), L10n.string("vm.config.cmdline")) },
+            { check(crate_config_add_disk(config, settings.disk, 0), L10n.string("vm.config.disk")) },
             {
                 guard let seed = settings.seed else { return nil }
-                return check(crate_config_add_disk(config, seed, CRATE_DISK_READ_ONLY), "the first-boot settings")
+                return check(crate_config_add_disk(config, seed, CRATE_DISK_READ_ONLY),
+                             L10n.string("vm.config.seed"))
             },
             {
                 var network: UInt32 = 0
-                return check(crate_config_add_network(config, &network), "the network")
+                return check(crate_config_add_network(config, &network), L10n.string("vm.config.network"))
             },
             {
                 var callbacks = console.callbacks
                 var index: UInt32 = 0
-                return check(crate_config_add_console(config, CRATE_CONSOLE_SERIAL, &callbacks, &index), "the console")
+                return check(crate_config_add_console(config, CRATE_CONSOLE_SERIAL, &callbacks, &index),
+                             L10n.string("vm.config.console"))
             },
             {
                 var callbacks = display.callbacks
                 var index: UInt32 = 0
-                if let failure = check(crate_config_add_display(config, Settings.gpu, &callbacks, &index), "the display") {
+                if let failure = check(crate_config_add_display(config, Settings.gpu, &callbacks, &index),
+                                       L10n.string("vm.config.display")) {
                     return failure
                 }
                 let modes = settings.displayModes
-                return check(crate_config_set_display_modes(config, index, modes, modes.count), "the display's sizes")
+                return check(crate_config_set_display_modes(config, index, modes, modes.count),
+                             L10n.string("vm.config.displayModes"))
             },
-            { check(crate_config_add_input(config, CRATE_INPUT_KEYBOARD | CRATE_INPUT_TABLET), "the keyboard and tablet") },
+            { check(crate_config_add_input(config, CRATE_INPUT_KEYBOARD | CRATE_INPUT_TABLET),
+                    L10n.string("vm.config.input")) },
             {
                 check(crate_config_set_state_callback(config, { context, state, reason in
                     guard let context, state == CRATE_STATE_STOPPED else { return }
                     let runner = Unmanaged<MachineRunner>.fromOpaque(context).takeUnretainedValue()
                     let error = reason == CRATE_STOP_ERROR ? String(cString: crate_last_error()) : nil
                     Task { @MainActor in runner.stopped(reason, error: error) }
-                }, context), "the state callback")
+                }, context), L10n.string("vm.config.stateCallback"))
             },
         ]
         for step in steps {
             if let failure = step() { return .failure(failure) }
         }
         var made: OpaquePointer?
-        if let failure = check(crate_machine_create(config, &made), "to create the VM") { return .failure(failure) }
-        guard let made else { return .failure("crate made no VM.") }
+        if let failure = check(crate_machine_create(config, &made), L10n.string("vm.config.create")) {
+            return .failure(failure)
+        }
+        guard let made else { return .failure(L10n.string("vm.error.noVM")) }
         return .success(made)
     }
 
     private func stopped(_ reason: crate_stop_reason, error: String?) {
         let text: String
         switch reason {
-        case CRATE_STOP_POWER_OFF: text = "The VM shut down."
-        case CRATE_STOP_RESET: text = "The VM asked to restart."
-        case CRATE_STOP_KILLED: text = "The VM was stopped."
-        default: text = "The VM stopped: \(error ?? "crate gave no reason")."
+        case CRATE_STOP_POWER_OFF: text = L10n.string("vm.stop.powerOff")
+        case CRATE_STOP_RESET: text = L10n.string("vm.stop.reset")
+        case CRATE_STOP_KILLED: text = L10n.string("vm.stop.killed")
+        default: text = L10n.format("vm.stop.error", error ?? L10n.string("vm.stop.noReason"))
         }
         AppLog.write("vm: \(text)")
         #if DEBUG

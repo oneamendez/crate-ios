@@ -20,6 +20,16 @@ enum OSFamily: String, Codable, CaseIterable, Identifiable {
         case .windows: "Windows"
         }
     }
+
+    /// The family name in the app's language. Family names that are proper
+    /// nouns stay as they are in the translation.
+    var titleKey: String {
+        switch self {
+        case .linux: "os.linux"
+        case .macOS: "os.macos"
+        case .windows: "os.windows"
+        }
+    }
 }
 
 /// An operating system Crate knows how to install: what it is called and how it
