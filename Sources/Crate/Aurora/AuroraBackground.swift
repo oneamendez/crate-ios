@@ -2,6 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+import Foundation
 import SwiftUI
 
 /// The room the app sits in: midnight, with three slow aurora lights. Drawn in
