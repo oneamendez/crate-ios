@@ -208,6 +208,10 @@ struct AuroraJITBadge: View {
             HStack(spacing: 7) {
                 if isChecking {
                     ProgressView().controlSize(.mini).tint(color)
+                } else if compact {
+                    Image(systemName: jit.isOn ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(color)
                 } else {
                     Circle()
                         .fill(color)
