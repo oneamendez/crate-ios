@@ -62,9 +62,9 @@ struct CatalogImage: Identifiable, Hashable, Decodable {
     }
 
     /// The VM this image becomes once installed.
-    func machine(memoryGB: Int, diskGB: Int) -> Machine {
+    func machine(memoryGB: Int, diskGB: Int, cpuCount: Int = 4) -> Machine {
         Machine(distributionID: distributionID, version: version, codename: nil,
-                cpuCount: 4, memoryGB: memoryGB, diskGB: diskGB,
+                cpuCount: cpuCount, memoryGB: memoryGB, diskGB: diskGB,
                 diskUsedGB: Double(disk.size) / 1e9,
                 desktop: desktop, display: "1280 × 800",
                 imageID: id, cmdline: cmdline)
@@ -95,7 +95,7 @@ enum CatalogError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unavailable(let status): "The list of VMs isn't available right now (HTTP \(status))."
+        case .unavailable(let status): L10n.format("catalog.error.unavailable", "\(status)")
         }
     }
 }

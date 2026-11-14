@@ -53,6 +53,9 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
     init() {
         let phone = UIDevice.current.userInterfaceIdiom == .phone
         super.init(frame: CGRect(x: 0, y: 0, width: 320, height: phone ? 36 : 48), inputViewStyle: .keyboard)
+        // The keys are Linux key codes laid out physically, not translated
+        // text: keep the bar left-to-right under an Arabic interface too.
+        semanticContentAttribute = .forceLeftToRight
         allowsSelfSizing = true
         build()
     }
@@ -84,7 +87,7 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
         }
         let dismiss = makeButton(title: nil, icon: "keyboard.chevron.compact.down", dark: true)
         dismiss.addTarget(self, action: #selector(dismissKeyboard), for: .touchUpInside)
-        dismiss.accessibilityLabel = "Hide Keyboard"
+        dismiss.accessibilityLabel = L10n.string("keyboard.hide")
         trailing = [
             key(icon: "arrow.left", dark: false, codes: [105]),
             key(icon: "arrow.down", dark: false, codes: [108]),
@@ -92,11 +95,14 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
             key(icon: "arrow.right", dark: false, codes: [106]),
             Key(button: dismiss, codes: nil),
         ]
-        leading[0].button.accessibilityLabel = "Escape"
-        controlButton.accessibilityLabel = "Control"
-        superButton.accessibilityLabel = "Super"
-        leading[3].button.accessibilityLabel = "Tab"
-        for (key, name) in zip(trailing, ["Left", "Down", "Up", "Right"]) {
+        leading[0].button.accessibilityLabel = L10n.string("keyboard.escape")
+        controlButton.accessibilityLabel = L10n.string("keyboard.control")
+        superButton.accessibilityLabel = L10n.string("keyboard.super")
+        leading[3].button.accessibilityLabel = L10n.string("keyboard.tab")
+        for (key, name) in zip(trailing, [
+            L10n.string("keyboard.left"), L10n.string("keyboard.down"),
+            L10n.string("keyboard.up"), L10n.string("keyboard.right"),
+        ]) {
             key.button.accessibilityLabel = name
         }
         for key in leading + symbols + functionKeys + trailing {

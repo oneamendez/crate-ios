@@ -4,8 +4,9 @@
 
 import SwiftUI
 
-/// Pick a system image from the catalog and a memory limit, give the account
-/// to make in it, then install it.
+/// Pick a real catalog image, give it real hardware, and install it. The
+/// catalog, downloads, checksums and cloud-init seed are the same engine path
+/// as before; only the presentation is new.
 struct InstallScreen: View {
     @Environment(MachineStore.self) private var store
     @Environment(Installer.self) private var installer
@@ -16,13 +17,15 @@ struct InstallScreen: View {
     @State private var catalog = CatalogState.loading
     @State private var selectedID: String?
     @AppStorage(SettingsKey.installMemoryGB) private var memoryGB = 6
+    @AppStorage(SettingsKey.installCPUCount) private var cpuCount = 4
+    @AppStorage(SettingsKey.installDiskGB) private var diskGB = 32
     @State private var askingForAccount = false
     @State private var confirmingCancel = false
+    @State private var didClampCPU = false
 
     private let memoryChoices = [4, 6, 8]
-    /// The disk every VM gets: a sparse file, so it takes only what the guest
-    /// writes.
-    private let diskGB = 32
+    private let diskChoices = [32, 48, 64]
+    private let diskDefault = 32
 
     enum CatalogState {
         case loading
@@ -39,6 +42,15 @@ struct InstallScreen: View {
         images.first { $0.id == selectedID } ?? images.first
     }
 
+    private var maximumCPUs: Int {
+        max(1, ProcessInfo.processInfo.activeProcessorCount - 1)
+    }
+
+    private var cpuChoices: [Int] {
+        let choices = [1, 2, 4, 6, 8].filter { $0 <= maximumCPUs }
+        return choices.isEmpty ? [1] : choices
+    }
+
     /// Nil when iOS doesn't say, in which case Install stays available.
     private var freeBytes: Int64? { Format.freeDiskBytes() }
 
@@ -52,102 +64,158 @@ struct InstallScreen: View {
         return freeBytes.map { $0 >= neededBytes(selected) } ?? true
     }
 
+    private var catalogColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 280 : 310,
+                            maximum: 540), spacing: 14, alignment: .top)]
+    }
+
     var body: some View {
         NavigationStack {
-            List {
-                imagesSection
-                    .disabled(installer.isBusy)
-
-                Section {
-                    Picker("Memory limit", selection: $memoryGB) {
-                        ForEach(memoryChoices, id: \.self) { gb in
-                            Text("\(gb) GB").tag(gb)
+            ZStack {
+                AuroraBackground()
+                ScrollView {
+                    AuroraContentColumn {
+                        VStack(alignment: .leading, spacing: AuroraSpace.xl) {
+                            pageHeader
+                            catalogSection
+                            if let selected {
+                                configuration(for: selected)
+                            }
+                            installFooter
                         }
+                        .padding(.horizontal, AuroraSpace.lg)
+                        .padding(.top, AuroraSpace.sm)
+                        .padding(.bottom, 44)
                     }
-                    .pickerStyle(.segmented)
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                } header: {
-                    Text("Memory Limit")
-                } footer: {
-                    Text(memoryFooter)
                 }
-                .disabled(installer.isBusy)
-
-                // At the accessibility text sizes a pinned bar would cover half
-                // the screen, so Install scrolls with the list instead.
-                if typeSize.isAccessibilitySize {
-                    Section {
-                        installControls
-                    }
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                }
+                .scrollIndicators(.hidden)
+                .refreshable { await loadCatalog() }
             }
-            .navigationTitle("Install Vms")
-            .safeAreaInset(edge: .bottom) {
-                if !typeSize.isAccessibilitySize, selected != nil || installer.phase != .idle {
-                    installControls
-                        .padding(.horizontal, 20)
-                        .padding(.top, 14)
-                        .padding(.bottom, 10)
-                        .background(.bar)
-                }
+            .toolbar(.hidden, for: .navigationBar)
+            .task {
+                await loadCatalog()
+                clampCPU()
             }
-            .task { await loadCatalog() }
-            .refreshable { await loadCatalog() }
+            .onAppear { clampCPU() }
             .onChange(of: selectedID) {
-                // A finished install belongs to the image it was for.
                 if case .done = installer.phase { installer.reset() }
             }
             .sheet(isPresented: $askingForAccount) {
                 if let selected {
                     AccountSheet(image: selected) { owner in
                         askingForAccount = false
-                        installer.install(selected, memoryGB: memoryGB, diskGB: diskGB, owner: owner, into: store)
+                        installer.install(selected, memoryGB: memoryGB, diskGB: diskGB,
+                                          cpuCount: cpuCount, owner: owner, into: store)
                     }
                 }
             }
-            .alert(cancelTitle, isPresented: $confirmingCancel) {
-                Button("Stop Installing", role: .destructive) { installer.cancel() }
-                Button("Keep Installing", role: .cancel) {}
+            .alert(L10n.format("install.cancel.title", installer.image?.name ?? ""),
+                   isPresented: $confirmingCancel) {
+                Button(role: .destructive) {
+                    installer.cancel()
+                } label: {
+                    Text(l10n: "install.cancel.stop")
+                }
+                Button(role: .cancel) {} label: {
+                    Text(l10n: "install.cancel.keep")
+                }
             } message: {
-                Text("What's downloaded so far is discarded.")
+                Text(l10n: "install.cancel.message")
             }
         }
     }
 
+    // MARK: - Header
+
+    private var pageHeader: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(l10n: "install.eyebrow")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .auroraTracking(1.6)
+                        .foregroundStyle(AuroraPalette.info)
+                    Text(l10n: "install.title")
+                        .font(AuroraType.hero)
+                        .foregroundStyle(AuroraPalette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(l10n: "install.subtitle")
+                        .font(AuroraType.body)
+                        .foregroundStyle(AuroraPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 10)
+                CrateMark(size: 58)
+                    .padding(.top, 4)
+            }
+        }
+        .padding(.top, 6)
+    }
+
+    // MARK: - Catalog
+
     @ViewBuilder
-    private var imagesSection: some View {
-        Section {
+    private var catalogSection: some View {
+        VStack(alignment: .leading, spacing: AuroraSpace.md) {
+            AuroraSectionHeader(titleKey: "install.choose.title",
+                                subtitleKey: "install.choose.subtitle",
+                                eyebrowKey: "install.choose.eyebrow")
+
             switch catalog {
             case .loading:
-                HStack {
-                    Spacer()
-                    ProgressView()
-                    Spacer()
+                AuroraCard(tint: AuroraPalette.cyan) {
+                    AuroraLoadingState(messageKey: "install.catalog.loading")
+                        .frame(maxWidth: .infinity)
                 }
-                .padding(.vertical, 8)
             case .failed(let message):
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(message)
-                        .foregroundStyle(.secondary)
-                    Button("Try Again") { Task { await loadCatalog() } }
+                AuroraCard(tint: AuroraPalette.coral) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "wifi.slash")
+                                .font(.system(size: 19, weight: .semibold))
+                                .foregroundStyle(AuroraPalette.danger)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(l10n: "install.catalog.failed")
+                                    .font(AuroraType.headline)
+                                    .foregroundStyle(AuroraPalette.textPrimary)
+                                Text(verbatim: message)
+                                    .font(AuroraType.subheadline)
+                                    .foregroundStyle(AuroraPalette.textSecondary)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        Button {
+                            Task { await loadCatalog() }
+                        } label: {
+                            Label {
+                                Text(l10n: "install.tryAgain")
+                            } icon: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                        }
+                        .buttonStyle(AuroraSecondaryButtonStyle())
+                    }
                 }
-                .padding(.vertical, 4)
             case .loaded(let images):
-                ForEach(images) { image in
-                    CatalogRow(
-                        image: image,
-                        isSelected: image.id == selected?.id,
-                        isInstalled: store.isInstalled(image)
-                    ) {
-                        selectedID = image.id
+                if images.isEmpty {
+                    AuroraCard {
+                        AuroraEmptyState(titleKey: "install.catalog.empty.title",
+                                         messageKey: "install.catalog.empty.message")
+                    }
+                } else {
+                    LazyVGrid(columns: catalogColumns, alignment: .leading, spacing: 14) {
+                        ForEach(images) { image in
+                            CatalogImageCard(
+                                image: image,
+                                isSelected: image.id == selected?.id,
+                                isInstalled: store.isInstalled(image)) {
+                                    selectedID = image.id
+                                }
+                                .disabled(installer.isBusy)
+                        }
                     }
                 }
             }
-        } header: {
-            Text("Linux")
         }
     }
 
@@ -156,132 +224,370 @@ struct InstallScreen: View {
         do {
             let fetched = try await Catalog.fetch()
             catalog = .loaded(fetched.images)
+            if selectedID == nil { selectedID = fetched.images.first?.id }
         } catch {
             if case .loaded = catalog { return }
             catalog = .failed(error.localizedDescription)
         }
     }
 
-    private var memoryFooter: String {
-        var text = "The most memory the VM may use. You can change it later."
-        if let limit = MemoryReport().limit, UInt64(memoryGB) << 30 > limit {
-            text += " crate can only claim \(Format.memory(limit)) on this iPhone, so the VM gets less."
+    // MARK: - Configuration
+
+    private func configuration(for image: CatalogImage) -> some View {
+        VStack(alignment: .leading, spacing: AuroraSpace.md) {
+            AuroraSectionHeader(titleKey: "install.config.title",
+                                subtitleKey: nil,
+                                eyebrowKey: "install.config.eyebrow")
+
+            AuroraCard(tint: image.distribution.auroraTint) {
+                VStack(alignment: .leading, spacing: AuroraSpace.lg) {
+                    HStack(spacing: 12) {
+                        DistributionBadge(distribution: image.distribution, size: 42)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: image.name)
+                                .font(AuroraType.cardTitle)
+                                .foregroundStyle(AuroraPalette.textPrimary)
+                            Text(verbatim: "\(image.version) · \(image.desktop)")
+                                .font(AuroraType.subheadline)
+                                .foregroundStyle(AuroraPalette.textSecondary)
+                                .environment(\.layoutDirection, .leftToRight)
+                        }
+                        Spacer(minLength: 0)
+                        AuroraGlassPill {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(image.distribution.auroraTint)
+                                    .frame(width: 6, height: 6)
+                                Text(l10n: "install.config.selected")
+                                    .font(AuroraType.caption.weight(.semibold))
+                                    .foregroundStyle(AuroraPalette.textSecondary)
+                            }
+                        }
+                    }
+
+                    AuroraRule()
+
+                    ChoiceRow(titleKey: "install.config.cpu",
+                              systemImage: "cpu",
+                              choices: cpuChoices.map { Choice(value: $0, label: "\($0)") },
+                              selection: $cpuCount)
+                    ChoiceRow(titleKey: "install.config.memory",
+                              systemImage: "memorychip",
+                              choices: memoryChoices.map { Choice(value: $0, label: "\($0) GB") },
+                              selection: $memoryGB)
+                    ChoiceRow(titleKey: "install.config.storage",
+                              systemImage: "internaldrive",
+                              choices: diskChoices.map { Choice(value: $0, label: "\($0) GB") },
+                              selection: $diskGB)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(l10n: "install.config.cpuNote")
+                        Text(l10n: "install.config.storageNote")
+                    }
+                    .font(AuroraType.footnote)
+                    .foregroundStyle(AuroraPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    if let warning = memoryWarning {
+                        Label {
+                            Text(verbatim: warning)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                        }
+                        .font(AuroraType.footnote)
+                        .foregroundStyle(AuroraPalette.warning)
+                    }
+                }
+            }
+            .disabled(installer.isBusy)
+            .opacity(installer.isBusy ? 0.72 : 1)
         }
-        return text
     }
 
-    private var cancelTitle: String {
-        "Stop Installing \(installer.image?.name ?? "")?"
+    private var memoryWarning: String? {
+        guard let limit = MemoryReport().limit, UInt64(memoryGB) << 30 > limit else { return nil }
+        return L10n.format("install.config.memoryWarning", Format.memory(limit))
     }
 
-    // MARK: - Install controls
+    // MARK: - Install
 
     @ViewBuilder
-    private var installControls: some View {
-        VStack(spacing: 8) {
-            switch installer.phase {
-            case .idle:
-                if let selected {
-                    Button {
-                        askingForAccount = true
-                    } label: {
-                        Label("Install \(selected.name)", systemImage: "arrow.down.circle.fill")
-                            .font(.title3.weight(.semibold))
+    private var installFooter: some View {
+        switch installer.phase {
+        case .idle:
+            if let selected {
+                AuroraCard(tint: selected.distribution.auroraTint) {
+                    VStack(alignment: .leading, spacing: AuroraSpace.md) {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(l10n: "install.ready.title")
+                                    .font(AuroraType.cardTitle)
+                                    .foregroundStyle(AuroraPalette.textPrimary)
+                                Text(verbatim: spaceNeeded(selected))
+                                    .font(AuroraType.footnote)
+                                    .foregroundStyle(hasRoom ? AuroraPalette.textSecondary : AuroraPalette.danger)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        Button {
+                            askingForAccount = true
+                        } label: {
+                            Label {
+                                Text(verbatim: L10n.format("install.installNamed", selected.name))
+                            } icon: {
+                                Image(systemName: "arrow.down.circle.fill")
+                            }
                             .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(AuroraPrimaryButtonStyle(fullWidth: true))
+                        .disabled(!hasRoom)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.large)
-                    .disabled(!hasRoom)
-                    Text(spaceNeeded(selected))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
                 }
-            case .downloading(let done, let total):
-                progress(title: "Downloading \(installer.image?.name ?? "")…",
-                         value: total > 0 ? Double(done) / Double(total) : 0,
-                         detail: "\(Format.bytes(done)) of \(Format.bytes(total)) · Keep crate open until it's done.",
-                         cancellable: true)
-            case .unpacking(let done, let total):
-                progress(title: "Unpacking \(installer.image?.name ?? "")…",
-                         value: total > 0 ? Double(done) / Double(total) : 0,
-                         detail: "\(Format.bytes(done)) of \(Format.bytes(total)) · Keep crate open until it's done.",
-                         cancellable: true)
-            case .finishing:
-                progress(title: "Installing \(installer.image?.name ?? "")…", value: nil,
-                         detail: "Checking the disk and setting up your account", cancellable: false)
-            case .done(let machine):
-                HStack(spacing: 12) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.title)
-                        .foregroundStyle(.green)
-                    VStack(alignment: .leading) {
-                        Text("\(machine.name) is installed")
-                            .font(.headline)
-                        Text("Its first start sets up your account.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+            }
+        case .downloading, .unpacking:
+            progressCard(cancellable: true)
+        case .finishing:
+            progressCard(cancellable: false)
+        case .done(let machine):
+            AuroraCard(tint: AuroraPalette.emerald) {
+                VStack(alignment: .leading, spacing: AuroraSpace.md) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(AuroraPalette.success)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(verbatim: L10n.format("install.done.title", machine.name))
+                                .font(AuroraType.cardTitle)
+                                .foregroundStyle(AuroraPalette.textPrimary)
+                            Text(l10n: "install.done.message")
+                                .font(AuroraType.subheadline)
+                                .foregroundStyle(AuroraPalette.textSecondary)
+                        }
                     }
-                    Spacer()
-                    Button("Go to Home") {
+                    Button {
                         installer.reset()
                         onShowHome()
+                    } label: {
+                        Label {
+                            Text(l10n: "install.done.home")
+                        } icon: {
+                            Image(systemName: "house.fill")
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .buttonBorderShape(.capsule)
+                    .buttonStyle(AuroraPrimaryButtonStyle(fullWidth: true))
                 }
-            case .failed(let message):
-                HStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.title)
-                        .foregroundStyle(.orange)
-                    Text(message)
-                        .font(.subheadline)
-                    Spacer()
-                    Button("OK") { installer.reset() }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.capsule)
+            }
+        case .failed(let message):
+            AuroraCard(tint: AuroraPalette.coral) {
+                VStack(alignment: .leading, spacing: AuroraSpace.md) {
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(AuroraPalette.danger)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(l10n: "install.failed.title")
+                                .font(AuroraType.cardTitle)
+                                .foregroundStyle(AuroraPalette.textPrimary)
+                            Text(verbatim: message)
+                                .font(AuroraType.subheadline)
+                                .foregroundStyle(AuroraPalette.textSecondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Button {
+                        installer.reset()
+                    } label: {
+                        Text(l10n: "common.dismiss")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(AuroraSecondaryButtonStyle(fullWidth: true))
                 }
             }
         }
     }
 
-    private func progress(title: String, value: Double?, detail: String, cancellable: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title)
-                    .font(.headline)
-                Spacer()
+    private func progressCard(cancellable: Bool) -> some View {
+        AuroraCard(tint: AuroraPalette.cyan) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(verbatim: InstallProgressText.title(for: installer))
+                            .font(AuroraType.headline)
+                            .foregroundStyle(AuroraPalette.textPrimary)
+                        Text(verbatim: InstallProgressText.detail(for: installer))
+                            .font(AuroraType.footnote)
+                            .foregroundStyle(AuroraPalette.textSecondary)
+                            .monospacedDigit()
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    if let progress = InstallProgressText.progress(for: installer) {
+                        Text(verbatim: "\(Int((progress * 100).rounded()))%")
+                            .font(.system(.title3, design: .monospaced, weight: .semibold))
+                            .foregroundStyle(AuroraPalette.info)
+                            .environment(\.layoutDirection, .leftToRight)
+                    }
+                }
+                AuroraProgressBar(value: InstallProgressText.progress(for: installer))
+                Text(l10n: "install.keepOpen")
+                    .font(AuroraType.caption)
+                    .foregroundStyle(AuroraPalette.textTertiary)
                 if cancellable {
-                    Button("Cancel") { confirmingCancel = true }
+                    Button(role: .destructive) {
+                        confirmingCancel = true
+                    } label: {
+                        Text(l10n: "install.cancel.button")
+                    }
+                    .font(AuroraType.subheadline.weight(.semibold))
+                    .foregroundStyle(AuroraPalette.danger)
                 }
             }
-            if let value {
-                ProgressView(value: value)
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Text(detail)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
         }
     }
 
     private func spaceNeeded(_ image: CatalogImage) -> String {
         let needed = neededBytes(image)
         guard let free = freeBytes else {
-            return "Downloads \(Format.bytes(image.downloadBytes)) · needs \(Format.bytes(needed)) of storage"
+            return L10n.format("install.space.unknown",
+                               Format.bytes(image.downloadBytes), Format.bytes(needed))
         }
         if free < needed {
-            return "Free up \(Format.bytes(needed - free)) to install \(image.name)."
+            return L10n.format("install.space.short", Format.bytes(needed - free), image.name)
         }
-        return "Downloads \(Format.bytes(image.downloadBytes)) · needs \(Format.bytes(needed)) · \(Format.bytes(free)) available"
+        return L10n.format("install.space.ok",
+                           Format.bytes(image.downloadBytes), Format.bytes(needed), Format.bytes(free))
+    }
+
+    private func clampCPU() {
+        guard !didClampCPU else { return }
+        didClampCPU = true
+        if !cpuChoices.contains(cpuCount) {
+            cpuCount = cpuChoices.last ?? 2
+        }
+        if !memoryChoices.contains(memoryGB) {
+            memoryGB = memoryChoices.first ?? 4
+        }
+        if !diskChoices.contains(diskGB) {
+            diskGB = diskDefault
+        }
     }
 }
+
+// MARK: - Catalog card
+
+struct CatalogImageCard: View {
+    let image: CatalogImage
+    let isSelected: Bool
+    let isInstalled: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            AuroraCard(tint: isSelected ? image.distribution.auroraTint : .clear, padding: AuroraSpace.md) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        DistributionBadge(distribution: image.distribution, size: 42)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 7) {
+                                Text(verbatim: image.name)
+                                    .font(AuroraType.headline)
+                                    .foregroundStyle(AuroraPalette.textPrimary)
+                                    .lineLimit(1)
+                                Text(verbatim: image.version)
+                                    .font(.system(.caption, design: .monospaced, weight: .medium))
+                                    .foregroundStyle(AuroraPalette.textTertiary)
+                                    .lineLimit(1)
+                                    .environment(\.layoutDirection, .leftToRight)
+                            }
+                            Text(verbatim: image.desktop)
+                                .font(AuroraType.subheadline)
+                                .foregroundStyle(AuroraPalette.textSecondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(isSelected ? AnyShapeStyle(AuroraPalette.accent)
+                                             : AnyShapeStyle(AuroraPalette.textTertiary.opacity(0.55)))
+                    }
+
+                    HStack(spacing: 8) {
+                        Label {
+                            Text(verbatim: Format.bytes(image.downloadBytes))
+                        } icon: {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .font(AuroraType.caption)
+                        .foregroundStyle(AuroraPalette.textTertiary)
+                        .environment(\.layoutDirection, .leftToRight)
+
+                        if isInstalled {
+                            Text(l10n: "install.installed")
+                                .font(AuroraType.caption.weight(.semibold))
+                                .foregroundStyle(AuroraPalette.success)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(AuroraPalette.success.opacity(0.12), in: Capsule())
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: AuroraRadius.card, style: .continuous)
+                    .strokeBorder(isSelected ? image.distribution.auroraTint.opacity(0.75) : .clear,
+                                  lineWidth: 1.5)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityLabel(Text(verbatim: "\(image.name), \(image.version), \(image.desktop)"))
+    }
+}
+
+// MARK: - Configuration choices
+
+private struct Choice: Identifiable {
+    let value: Int
+    let label: String
+    var id: Int { value }
+}
+
+private struct ChoiceRow: View {
+    let titleKey: String
+    let systemImage: String
+    let choices: [Choice]
+    @Binding var selection: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label {
+                Text(l10n: titleKey)
+            } icon: {
+                Image(systemName: systemImage)
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .font(AuroraType.caption.weight(.semibold))
+            .foregroundStyle(AuroraPalette.textSecondary)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 8, alignment: .leading)],
+                      alignment: .leading, spacing: 8) {
+                ForEach(choices) { choice in
+                    AuroraChoiceChip(label: choice.label,
+                                     isSelected: selection == choice.value) {
+                        selection = choice.value
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Account
 
 /// The account to make in the VM, asked for before installing: the user name
 /// and password to sign in with, and the computer's name.
@@ -293,57 +599,59 @@ struct AccountSheet: View {
     @State private var user = ""
     @State private var password = ""
     @State private var hostname = ""
-    /// The password in the clear: with no second field to type it again in,
-    /// it's how a typo gets caught.
     @State private var showsPassword = false
     @FocusState private var passwordFocused: Bool
 
     private var userValid: Bool { SeedDisk.isValid(user: user) }
     private var hostnameValid: Bool { SeedDisk.isValid(hostname: hostname) }
 
+    private var canInstall: Bool {
+        userValid && !password.isEmpty && hostnameValid
+    }
+
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField("User Name", text: $user)
-                        .textContentType(.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    passwordField(shown: showsPassword)
-                } header: {
-                    Text("Your Account")
-                } footer: {
-                    if !user.isEmpty && !userValid {
-                        Text("Lowercase letters, numbers, \"-\" and \"_\", starting with a letter.")
-                    } else {
-                        Text("What you sign in to \(image.name) with. crate keeps only a hash of the password.")
+            ZStack {
+                AuroraBackground()
+                ScrollView {
+                    AuroraContentColumn(maxWidth: 620) {
+                        VStack(alignment: .leading, spacing: AuroraSpace.xl) {
+                            header
+                            accountFields
+                            computerFields
+                            note
+                            Button {
+                                onInstall(SeedDisk(user: user, password: password, hostname: hostname,
+                                                   timeZone: TimeZone.current.identifier,
+                                                   vendorData: image.vendorData))
+                            } label: {
+                                Label {
+                                    Text(l10n: "account.install")
+                                } icon: {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(AuroraPrimaryButtonStyle(fullWidth: true))
+                            .disabled(!canInstall)
+                        }
+                        .padding(.horizontal, AuroraSpace.lg)
+                        .padding(.top, AuroraSpace.md)
+                        .padding(.bottom, 38)
                     }
                 }
-                Section {
-                    TextField("Computer Name", text: $hostname)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } footer: {
-                    if !hostname.isEmpty && !hostnameValid {
-                        Text("Lowercase letters, numbers and \"-\".")
-                    } else {
-                        Text("The name \(image.name) goes by on the network.")
-                    }
-                }
+                .scrollDismissesKeyboard(.interactively)
+                .scrollIndicators(.hidden)
             }
-            .navigationTitle("Install \(image.name)")
+            .navigationTitle(L10n.format("account.title", image.name))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Install") {
-                        onInstall(SeedDisk(user: user, password: password, hostname: hostname,
-                                           timeZone: TimeZone.current.identifier,
-                                           vendorData: image.vendorData))
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text(l10n: "common.cancel")
                     }
-                    .disabled(!userValid || password.isEmpty || !hostnameValid)
                 }
             }
             .onAppear {
@@ -352,92 +660,125 @@ struct AccountSheet: View {
         }
     }
 
-    /// The password field, and the eye that shows or hides what's in it.
-    /// Swapping the field drops the keyboard, so focus is put back.
-    private func passwordField(shown: Bool) -> some View {
-        HStack {
-            Group {
-                if shown {
-                    TextField("Password", text: $password)
+    private var header: some View {
+        HStack(spacing: 14) {
+            DistributionBadge(distribution: image.distribution, size: 52)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(l10n: "account.eyebrow")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .auroraTracking(1.4)
+                    .foregroundStyle(AuroraPalette.info)
+                Text(verbatim: image.name)
+                    .font(AuroraType.title)
+                    .foregroundStyle(AuroraPalette.textPrimary)
+                Text(l10n: "account.subtitle")
+                    .font(AuroraType.subheadline)
+                    .foregroundStyle(AuroraPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var accountFields: some View {
+        AuroraCard(tint: image.distribution.auroraTint) {
+            VStack(alignment: .leading, spacing: AuroraSpace.lg) {
+                Text(l10n: "account.yourAccount")
+                    .font(AuroraType.cardTitle)
+                    .foregroundStyle(AuroraPalette.textPrimary)
+
+                AuroraField(titleKey: "account.user",
+                            systemImage: "person",
+                            isInvalid: !user.isEmpty && !userValid) {
+                    TextField("", text: $user, prompt: Text(l10n: "account.user.placeholder"))
+                        .textContentType(.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .environment(\.layoutDirection, .leftToRight)
+                }
+                if !user.isEmpty && !userValid {
+                    Text(l10n: "account.user.invalid")
+                        .font(AuroraType.footnote)
+                        .foregroundStyle(AuroraPalette.danger)
+                }
+
+                passwordField
+
+                Text(l10n: "account.password.note")
+                    .font(AuroraType.footnote)
+                    .foregroundStyle(AuroraPalette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var passwordField: some View {
+        AuroraField(titleKey: "account.password", systemImage: "lock") {
+            HStack(spacing: 8) {
+                Group {
+                    if showsPassword {
+                        TextField("", text: $password, prompt: Text(l10n: "account.password.placeholder"))
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    } else {
+                        SecureField("", text: $password, prompt: Text(l10n: "account.password.placeholder"))
+                    }
+                }
+                .textContentType(.newPassword)
+                .focused($passwordFocused)
+                .environment(\.layoutDirection, .leftToRight)
+
+                Button {
+                    let wasFocused = passwordFocused
+                    showsPassword.toggle()
+                    if wasFocused { DispatchQueue.main.async { passwordFocused = true } }
+                } label: {
+                    Image(systemName: showsPassword ? "eye.slash" : "eye")
+                        .foregroundStyle(AuroraPalette.textSecondary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text(l10n: showsPassword ? "account.hidePassword" : "account.showPassword"))
+            }
+        }
+    }
+
+    private var computerFields: some View {
+        AuroraCard(tint: AuroraPalette.violet) {
+            VStack(alignment: .leading, spacing: AuroraSpace.lg) {
+                Text(l10n: "account.computer")
+                    .font(AuroraType.cardTitle)
+                    .foregroundStyle(AuroraPalette.textPrimary)
+                AuroraField(titleKey: "account.hostname",
+                            systemImage: "desktopcomputer",
+                            isInvalid: !hostname.isEmpty && !hostnameValid) {
+                    TextField("", text: $hostname, prompt: Text(l10n: "account.hostname.placeholder"))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .environment(\.layoutDirection, .leftToRight)
+                }
+                if !hostname.isEmpty && !hostnameValid {
+                    Text(l10n: "account.hostname.invalid")
+                        .font(AuroraType.footnote)
+                        .foregroundStyle(AuroraPalette.danger)
                 } else {
-                    SecureField("Password", text: $password)
+                    Text(l10n: "account.hostname.note")
+                        .font(AuroraType.footnote)
+                        .foregroundStyle(AuroraPalette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .textContentType(.newPassword)
-            .focused($passwordFocused)
-            Button(shown ? "Hide Password" : "Show Password",
-                   systemImage: shown ? "eye.slash" : "eye") {
-                let wasFocused = passwordFocused
-                showsPassword.toggle()
-                if wasFocused { DispatchQueue.main.async { passwordFocused = true } }
-            }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-        }
-    }
-}
-
-/// One downloadable image: its name with the version beside it, and a check
-/// when selected. At the accessibility text sizes the version goes under the
-/// name.
-struct CatalogRow: View {
-    let image: CatalogImage
-    let isSelected: Bool
-    let isInstalled: Bool
-    let onSelect: () -> Void
-
-    @Environment(\.dynamicTypeSize) private var typeSize
-
-    var body: some View {
-        Button(action: onSelect) {
-            HStack(alignment: typeSize.isAccessibilitySize ? .top : .center, spacing: 14) {
-                text
-                Spacer(minLength: 0)
-                checkmark
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private var text: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            let nameAndVersion = typeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 3))
-                : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 6))
-            nameAndVersion {
-                Text(image.name)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .layoutPriority(1)
-                Text(image.version)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            .lineLimit(typeSize.isAccessibilitySize ? 2 : 1)
-            Text(details)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
         }
     }
 
-    /// "KDE Plasma · 1.5 GB", and "· Installed" once there's a copy on Home.
-    private var details: String {
-        var parts = [image.desktop, Format.bytes(image.downloadBytes)]
-        if isInstalled { parts.append("Installed") }
-        return parts.joined(separator: " · ")
+    private var note: some View {
+        Label {
+            Text(l10n: "account.firstBoot")
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "info.circle")
+        }
+        .font(AuroraType.footnote)
+        .foregroundStyle(AuroraPalette.textSecondary)
     }
 
-    private var checkmark: some View {
-        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-            .font(.title2)
-            .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-    }
 }

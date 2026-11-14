@@ -40,11 +40,11 @@ final class Installer {
         }
     }
 
-    func install(_ image: CatalogImage, memoryGB: Int, diskGB: Int, owner: SeedDisk,
-                 into store: MachineStore) {
+    func install(_ image: CatalogImage, memoryGB: Int, diskGB: Int, cpuCount: Int = 4,
+                 owner: SeedDisk, into store: MachineStore) {
         guard !isBusy else { return }
         self.image = image
-        let machine = image.machine(memoryGB: memoryGB, diskGB: diskGB)
+        let machine = image.machine(memoryGB: memoryGB, diskGB: diskGB, cpuCount: cpuCount)
         let files = GuestFiles(for: machine)
         phase = .downloading(done: 0, total: image.downloadBytes)
         AppLog.write("install: \(image.id) \(image.version) as \(machine.id), "
@@ -138,9 +138,9 @@ enum InstallError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .download(let status): "The download stopped (HTTP \(status)). Try again."
-        case .corrupt(let what): "\(what) didn't download correctly. Try again."
-        case .unsupported(let kind): "This image is packed in a way crate can't unpack (\(kind))."
+        case .download(let status): L10n.format("install.error.download", "\(status)")
+        case .corrupt(let what): L10n.format("install.error.corrupt", what)
+        case .unsupported(let kind): L10n.format("install.error.unsupported", kind)
         }
     }
 }

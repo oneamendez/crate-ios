@@ -18,6 +18,13 @@ enum JITMethod: String, CaseIterable, Identifiable {
         }
     }
 
+    var titleKey: String {
+        switch self {
+        case .builtInStikJIT: "jit.method.builtIn"
+        case .stikDebug: "jit.method.stikDebug"
+        }
+    }
+
     static let standard = Self.builtInStikJIT
 }
 
@@ -28,6 +35,13 @@ enum SettingsKey {
     static let jitAtLaunch = "jit.turnOnAtLaunch"
     static let codeRegionMB = "jit.codeRegionMB"
     static let installMemoryGB = "install.memoryGB"
+    static let installCPUCount = "install.cpuCount"
+    static let installDiskGB = "install.diskGB"
+
+    /// Aurora Edition's own choices: they affect the UI only, never VM data.
+    static let appLanguage = "app.language"
+    static let appAppearance = "app.appearance"
+    static let appAnimations = "app.animations"
 
     /// Debug builds: pretend JIT is on (see `JITSession.previewOn`).
     static let previewJIT = "preview.jitOn"

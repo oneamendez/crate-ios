@@ -8,6 +8,7 @@ import SwiftUI
 struct CrateApp: App {
     @State private var store: MachineStore
     @State private var jit: JITSession
+    @State private var preferences: AppPreferences
     /// crate runs one VM per process: this is the one.
     @State private var runner = MachineRunner()
     /// Here rather than on the Install screen, so an install carries on while
@@ -31,15 +32,19 @@ struct CrateApp: App {
         let jit = JITSession()
         jit.start()
         _jit = State(initialValue: jit)
+        // After launch arguments, so QA can open any language or appearance
+        // without tapping through Settings.
+        _preferences = State(initialValue: AppPreferences())
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView(launchTab: options.tab, forceRail: options.rail)
+            RootView(launchTab: options.tab, forceRail: options.rail, skipIntro: options.skipIntro)
                 .environment(store)
                 .environment(jit)
                 .environment(runner)
                 .environment(installer)
+                .environment(preferences)
         }
     }
 }
@@ -53,6 +58,11 @@ struct LaunchOptions {
     var samples = false
     /// The open Duo's tab column, on any device.
     var rail = false
+    /// The animated opening, skipped for screenshots and UI tests.
+    var skipIntro = false
+    var language: AppLanguage?
+    var appearance: AppAppearance?
+    var animations: Bool?
 
     static func parse(_ arguments: [String]) -> LaunchOptions {
         var options = LaunchOptions()
@@ -66,6 +76,17 @@ struct LaunchOptions {
             case "--empty": options.empty = true
             case "--samples": options.samples = true
             case "--rail": options.rail = true
+            case "--skip-intro", "--no-splash": options.skipIntro = true
+            case "--language=system": options.language = .system
+            case "--language=en": options.language = .english
+            case "--language=ar": options.language = .arabic
+            case "--language=zh-Hans", "--language=zh": options.language = .simplifiedChinese
+            case "--language=fr": options.language = .french
+            case "--appearance=system": options.appearance = .system
+            case "--appearance=light": options.appearance = .light
+            case "--appearance=dark": options.appearance = .dark
+            case "--animations=on": options.animations = true
+            case "--animations=off": options.animations = false
             default: break
             }
         }
@@ -73,8 +94,13 @@ struct LaunchOptions {
     }
 
     /// `--jit=on|off` sets the debug builds' pretend-JIT switch, which the
-    /// real JIT state overrides when it's on.
+    /// real JIT state overrides when it's on. The appearance, language and
+    /// animation switches are ordinary preferences and persist.
     func applyToDefaults() {
-        if let jit { UserDefaults.standard.set(jit, forKey: SettingsKey.previewJIT) }
+        let defaults = UserDefaults.standard
+        if let jit { defaults.set(jit, forKey: SettingsKey.previewJIT) }
+        if let language { defaults.set(language.rawValue, forKey: SettingsKey.appLanguage) }
+        if let appearance { defaults.set(appearance.rawValue, forKey: SettingsKey.appAppearance) }
+        if let animations { defaults.set(animations, forKey: SettingsKey.appAnimations) }
     }
 }

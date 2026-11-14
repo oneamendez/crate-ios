@@ -1,0 +1,307 @@
+# Aurora Edition's continuous integration. It builds the real Crate scheme,
+# runs CrateTests on a simulator, preserves the logs and result bundle, and
+# packages the simulator app. On a manual run it can also build the unsigned
+# IPA, and — only with signing secrets configured — sign it.
+#
+# The project uses iOS 27 SDK APIs behind availability checks, so it needs the
+# same Xcode 27.1 runner as the ipa and frameworks workflows. If you fork this
+# repository onto GitHub-hosted runners, change `runs-on` to a macOS image with
+# Xcode 27.1 and update the xcode-select line below.
+name: ci
+
+on:
+  push:
+    branches: [main, feature/aurora-redesign]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      unsigned_ipa:
+        description: Build the unsigned IPA as an artifact
+        type: boolean
+        default: true
+      signed_ipa:
+        description: Sign a development IPA with the repository's signing secrets
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  attestations: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  NSUnbufferedIO: YES
+
+jobs:
+  build-and-test:
+    name: Build and test (iOS Simulator)
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 27.1
+        run: |
+          # idevice (Frameworks/IDevice.xcframework) is built for Apple silicon
+          # simulators only; the Intel Simulator slice is excluded in project.yml.
+          [ "$(uname -m)" = arm64 ] || {
+            echo "::error::Crate needs an Apple silicon macOS runner for its Simulator build."
+            exit 1
+          }
+          if [ -d /Applications/Xcode_27.1.app ]; then
+            sudo xcode-select -s /Applications/Xcode_27.1.app
+          fi
+          xcodebuild -version
+          xcrun simctl list runtimes
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Validate localisations
+        run: python3 Scripts/check-localizations.py
+
+      - name: Fetch pinned frameworks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_ATTESTATION: 1
+        run: |
+          Scripts/fetch-frameworks.sh
+          Scripts/fetch-stikjit.sh
+          Scripts/fetch-crate.sh
+
+      - name: Generate project
+        run: |
+          xcodegen generate
+          xcodebuild -list -project Crate.xcodeproj
+
+      - name: Choose an iPhone simulator
+        run: |
+          SIMULATOR_ID="$(xcrun simctl list devices available -j | python3 Scripts/choose-simulator.py)"
+          echo "SIMULATOR_ID=$SIMULATOR_ID" >> "$GITHUB_ENV"
+          echo "Using simulator $SIMULATOR_ID"
+
+      - name: Boot simulator
+        run: |
+          xcrun simctl boot "$SIMULATOR_ID" || true
+          xcrun simctl bootstatus "$SIMULATOR_ID" -b || true
+
+      - name: Build for testing
+        run: |
+          mkdir -p build-logs build
+          set -o pipefail
+          xcodebuild \
+            -project Crate.xcodeproj \
+            -scheme Crate \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath build/DerivedData \
+            -resultBundlePath build/Build.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing 2>&1 | tee build-logs/build.log
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Crate.xcodeproj \
+            -scheme Crate \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath build/DerivedData \
+            -resultBundlePath build/Test.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            test-without-building 2>&1 | tee build-logs/test.log
+
+      - name: Package simulator app
+        if: success()
+        run: |
+          APP="build/DerivedData/Build/Products/Debug-iphonesimulator/Crate.app"
+          test -d "$APP"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/Crate-simulator.zip"
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs-${{ github.run_id }}
+          path: build-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}
+          path: |
+            build/Test.xcresult
+            build/Build.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload simulator app
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate-simulator-${{ github.run_id }}
+          path: ${{ runner.temp }}/Crate-simulator.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summarise a failure
+        if: failure()
+        run: |
+          {
+            echo "## CI failed"
+            echo "See the **ci-logs** artifact for the full build and test output."
+            echo "This workflow did not produce an IPA or a signed build when a step above failed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  unsigned-ipa:
+    name: Unsigned IPA
+    if: github.event_name == 'workflow_dispatch' && inputs.unsigned_ipa
+    needs: build-and-test
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 27.1
+        run: |
+          if [ -d /Applications/Xcode_27.1.app ]; then
+            sudo xcode-select -s /Applications/Xcode_27.1.app
+          fi
+          xcodebuild -version
+      - run: brew install xcodegen
+      - name: Fetch pinned frameworks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_ATTESTATION: 1
+        run: |
+          Scripts/fetch-frameworks.sh
+          Scripts/fetch-stikjit.sh
+          Scripts/fetch-crate.sh
+      - name: Build unsigned IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          Scripts/build-ipa.sh "$RUNNER_TEMP/out/crate-unsigned.ipa"
+          cd "$RUNNER_TEMP/out"
+          shasum -a 256 crate-unsigned.ipa | tee crate-unsigned.ipa.sha256
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate-unsigned-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/out/crate-unsigned.ipa
+            ${{ runner.temp }}/out/crate-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Note the artifact
+        run: |
+          {
+            echo "## Unsigned IPA"
+            echo "crate-unsigned.ipa was built from \`$GITHUB_SHA\` and uploaded as an artifact."
+            echo "It is unsigned: sign it with \`Scripts/sign-ipa.sh\` and your own Apple account."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  signed-ipa:
+    name: Signed development IPA
+    if: github.event_name == 'workflow_dispatch' && inputs.signed_ipa
+    needs: build-and-test
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode 27.1
+        run: |
+          if [ -d /Applications/Xcode_27.1.app ]; then
+            sudo xcode-select -s /Applications/Xcode_27.1.app
+          fi
+          xcodebuild -version
+      - run: brew install xcodegen
+      - name: Fetch pinned frameworks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFY_ATTESTATION: 1
+        run: |
+          Scripts/fetch-frameworks.sh
+          Scripts/fetch-stikjit.sh
+          Scripts/fetch-crate.sh
+      - name: Build unsigned IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          Scripts/build-ipa.sh "$RUNNER_TEMP/out/crate-unsigned.ipa"
+      - name: Check signing secrets
+        env:
+          CERTIFICATE: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          APP_PROFILE: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+          HELPER_PROFILE: ${{ secrets.HELPER_PROVISIONING_PROFILE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$CERTIFICATE" ] || missing="$missing BUILD_CERTIFICATE_BASE64"
+          [ -n "$APP_PROFILE" ] || missing="$missing PROVISIONING_PROFILE_BASE64"
+          [ -n "$HELPER_PROFILE" ] || missing="$missing HELPER_PROVISIONING_PROFILE_BASE64"
+          [ -n "$P12_PASSWORD" ] || missing="$missing P12_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Signed build requested, but these secrets are missing:$missing"
+            exit 1
+          fi
+      - name: Install certificate and profiles
+        env:
+          CERTIFICATE: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          APP_PROFILE: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
+          HELPER_PROFILE: ${{ secrets.HELPER_PROVISIONING_PROFILE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$APP_PROFILE" | base64 --decode > "$HOME/Library/MobileDevice/Provisioning Profiles/aurora-app.mobileprovision"
+          echo "$HELPER_PROFILE" | base64 --decode > "$HOME/Library/MobileDevice/Provisioning Profiles/aurora-helper.mobileprovision"
+      - name: Sign the IPA
+        env:
+          BUNDLE_ID: ${{ secrets.SIGNING_BUNDLE_ID }}
+          IDENTITY: ${{ secrets.SIGNING_IDENTITY }}
+        run: |
+          # sign-ipa.sh reads the profile paths from PROFILE/HELPER_PROFILE;
+          # they were installed with fixed names above.
+          export PROFILE="$HOME/Library/MobileDevice/Provisioning Profiles/aurora-app.mobileprovision"
+          export HELPER_PROFILE="$HOME/Library/MobileDevice/Provisioning Profiles/aurora-helper.mobileprovision"
+          : "${BUNDLE_ID:=com.amendez.crate}"
+          Scripts/sign-ipa.sh "$RUNNER_TEMP/out/crate-unsigned.ipa"
+          test -f "$RUNNER_TEMP/out/crate-signed.ipa"
+          cd "$RUNNER_TEMP/out"
+          shasum -a 256 crate-signed.ipa | tee crate-signed.ipa.sha256
+          # Verify the signature that was actually produced before uploading it.
+          mkdir check && unzip -q crate-signed.ipa -d check
+          codesign --verify --deep --strict check/Payload/Crate.app
+      - name: Upload signed IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: crate-signed-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/out/crate-signed.ipa
+            ${{ runner.temp }}/out/crate-signed.ipa.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Note the signed artifact
+        run: |
+          {
+            echo "## Signed development IPA"
+            echo "A signed IPA was built and its code signature was verified in this run."
+            echo "It is a development build: install it on a registered device and turn on JIT as INSTALL.md describes."
+            echo "If this step ran, the artifact exists; if it did not, no signed IPA is claimed."
+          } >> "$GITHUB_STEP_SUMMARY"

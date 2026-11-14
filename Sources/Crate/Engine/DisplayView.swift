@@ -72,6 +72,9 @@ struct DisplayView: UIViewRepresentable {
         init(bridge: DisplayBridge) {
             self.bridge = bridge
             super.init(frame: .zero)
+            // The guest desktop has its own layout; crate's interface language
+            // must not mirror its coordinates or text.
+            semanticContentAttribute = .forceLeftToRight
             backgroundColor = .black
             picture.magnificationFilter = .linear
             layer.addSublayer(picture)

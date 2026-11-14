@@ -19,6 +19,9 @@ struct ConsoleView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> TerminalView {
         let view = TerminalView(frame: .zero)
+        // A terminal is a technical surface: commands, paths and addresses
+        // keep their left-to-right order in every app language.
+        view.semanticContentAttribute = .forceLeftToRight
         view.terminalDelegate = context.coordinator
         view.nativeBackgroundColor = .black
         view.nativeForegroundColor = UIColor(white: 0.92, alpha: 1)

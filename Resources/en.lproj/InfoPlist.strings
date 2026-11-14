@@ -1,0 +1,2 @@
+"NSLocalNetworkUsageDescription" = "crate looks for this iPhone's Remote Pairing service to turn on JIT.";
+"NSPhotoLibraryAddUsageDescription" = "crate saves screenshots of your VMs to Photos.";

@@ -4,6 +4,12 @@
 
 import SwiftUI
 
+/// The two views a running VM has: its desktop, and its serial console.
+enum MachinePane: Hashable {
+    case display
+    case console
+}
+
 /// A VM, full screen. With JIT on it boots in crate and shows either its screen
 /// or its console, a terminal on the serial port, with a switch between them
 /// in the toolbar. Without JIT it offers to turn it on.
@@ -17,7 +23,7 @@ struct MachineScreen: View {
     @AppStorage(SettingsKey.jitMethod) private var jitMethod = JITMethod.standard.rawValue
 
     @State private var confirmingStop = false
-    @State private var showing = Showing.display
+    @State private var showing: MachinePane
     @State private var showsKeyboard = false
     @State private var hasPicture = false
     /// How many times the hinge has opened or closed further.
@@ -33,15 +39,16 @@ struct MachineScreen: View {
     @State private var sharing: Screenshot?
     /// The display's white flash as a screenshot is taken.
     @State private var flash = false
+    @State private var logURL: URL?
 
-    /// The VM's screen, or its console.
-    enum Showing: Hashable {
-        case display
-        case console
-    }
     /// Debug builds pretending JIT is on have no code region to run in: they
     /// walk through a pretend boot instead.
     @State private var pretendRunning = false
+
+    init(machine: Machine, initialPane: MachinePane = .display) {
+        self.machine = machine
+        _showing = State(initialValue: initialPane)
+    }
 
     private var isThisMachine: Bool { runner.machineID == machine.id }
 
@@ -63,11 +70,21 @@ struct MachineScreen: View {
                 .modifier(MachineTitle(title: "\(machine.name) \(machine.version)"))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
-                .confirmationDialog("Stop \(machine.name)?", isPresented: $confirmingStop,
-                                    titleVisibility: .visible) {
-                    Button("Stop VM", role: .destructive) { stop() }
+                .confirmationDialog(
+                    L10n.format("machine.stop.title", machine.name),
+                    isPresented: $confirmingStop,
+                    titleVisibility: .visible
+                ) {
+                    Button(role: .destructive) {
+                        stop()
+                    } label: {
+                        Text(l10n: "machine.stop.confirm")
+                    }
+                    Button(role: .cancel) {} label: {
+                        Text(l10n: "common.cancel")
+                    }
                 } message: {
-                    Text("Anything not saved in \(machine.name) is lost.")
+                    Text(verbatim: L10n.format("machine.stop.message", machine.name))
                 }
                 .sheet(item: $sharing) { shot in
                     ShareSheet(items: [shot.file])
@@ -77,8 +94,12 @@ struct MachineScreen: View {
                 .sensoryFeedback(.impact(weight: .light), trigger: screenshot?.id)
         }
         .preferredColorScheme(.dark)
+        .tint(AuroraPalette.accent)
         .modifier(FollowsHinge(folds: $folds, isOpen: $isOpen))
         .task(id: jit.isOn) { boot() }
+        .onAppear {
+            if logURL == nil { logURL = LogExport.prepare() }
+        }
         .sheet(isPresented: Bindable(jit).showingSetup) {
             JITSetupView()
                 .environment(jit)
@@ -102,11 +123,31 @@ struct MachineScreen: View {
     private var toolbar: some ToolbarContent {
         if isRunning {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Stop", systemImage: "stop.fill") { confirmingStop = true }
+                Button {
+                    confirmingStop = true
+                } label: {
+                    Label {
+                        Text(l10n: "machine.stop")
+                    } icon: {
+                        Image(systemName: "stop.fill")
+                    }
+                }
             }
             ToolbarItemGroup(placement: .primaryAction) {
-                Toggle("Display", systemImage: "display", isOn: shows(.display))
-                Toggle("Terminal", systemImage: "apple.terminal", isOn: shows(.console))
+                Toggle(isOn: shows(.display)) {
+                    Label {
+                        Text(l10n: "machine.display")
+                    } icon: {
+                        Image(systemName: "display")
+                    }
+                }
+                Toggle(isOn: shows(.console)) {
+                    Label {
+                        Text(l10n: "machine.terminal")
+                    } icon: {
+                        Image(systemName: "apple.terminal")
+                    }
+                }
             }
             if showing == .display {
                 if #available(iOS 27.0, *) {
@@ -119,20 +160,40 @@ struct MachineScreen: View {
             }
         } else {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Close", systemImage: "xmark") { dismiss() }
+                Button {
+                    dismiss()
+                } label: {
+                    Label {
+                        Text(l10n: "machine.close")
+                    } icon: {
+                        Image(systemName: "xmark")
+                    }
+                }
             }
         }
     }
 
     private var keyboardItem: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Toggle("Keyboard", systemImage: "keyboard", isOn: $showsKeyboard)
+            Toggle(isOn: $showsKeyboard) {
+                Label {
+                    Text(l10n: "machine.keyboard")
+                } icon: {
+                    Image(systemName: "keyboard")
+                }
+            }
         }
     }
 
     private var screenshotButton: some View {
-        Button("Take Screenshot", systemImage: "camera.viewfinder", action: takeScreenshot)
-            .disabled(!hasPicture)
+        Button(action: takeScreenshot) {
+            Label {
+                Text(l10n: "machine.screenshot")
+            } icon: {
+                Image(systemName: "camera.viewfinder")
+            }
+        }
+        .disabled(!hasPicture)
     }
 
     /// The display's screen as it is now, into Photos, with a flash over the
@@ -171,8 +232,9 @@ struct MachineScreen: View {
                             .strokeBorder(.white.opacity(0.9), lineWidth: 2)
                     }
                     .shadow(radius: 8)
-                Text(shot.saved ? "Saved to Photos" : "Tap to Share")
+                Text(l10n: shot.saved ? "machine.savedToPhotos" : "machine.tapToShare")
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(AuroraPalette.textPrimary)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(.ultraThinMaterial, in: Capsule())
@@ -181,11 +243,11 @@ struct MachineScreen: View {
         .buttonStyle(.plain)
         .padding(16)
         .transition(.move(edge: .leading).combined(with: .opacity))
-        .accessibilityLabel(shot.saved ? "Screenshot, saved to Photos. Share" : "Screenshot. Share")
+        .accessibilityLabel(Text(l10n: shot.saved ? "machine.screenshot.savedA11y" : "machine.screenshot.shareA11y"))
     }
 
     /// On while `view` shows; turning it on shows it.
-    private func shows(_ view: Showing) -> Binding<Bool> {
+    private func shows(_ view: MachinePane) -> Binding<Bool> {
         Binding(get: { showing == view }, set: { if $0 { showing = view } })
     }
 
@@ -216,12 +278,19 @@ struct MachineScreen: View {
             }
         } else if runner.isRunning {
             centered {
-                Text("Another VM is running. Stop it first: crate runs one VM at a time.")
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
+                AuroraCard(tint: AuroraPalette.amber) {
+                    VStack(spacing: 10) {
+                        Image(systemName: "hourglass")
+                            .font(.system(size: 34))
+                            .foregroundStyle(AuroraPalette.warning)
+                        Text(l10n: "machine.anotherRunning")
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(AuroraPalette.textSecondary)
+                    }
+                }
             }
         } else {
-            centered { ProgressView().controlSize(.large) }
+            centered { ProgressView().controlSize(.large).tint(AuroraPalette.accent) }
         }
     }
 
@@ -245,13 +314,20 @@ struct MachineScreen: View {
         }
         .overlay {
             if !hasPicture {
-                VStack(spacing: 12) {
-                    ProgressView().controlSize(.large)
-                    Text("Starting the desktop…")
-                        .font(.headline)
-                    Text("The terminal shows the boot.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                VStack(spacing: 10) {
+                    ProgressView().controlSize(.large).tint(AuroraPalette.accent)
+                    Text(l10n: "machine.startingDesktop")
+                        .font(AuroraType.headline)
+                        .foregroundStyle(.white)
+                    Text(l10n: "machine.bootInTerminal")
+                        .font(AuroraType.subheadline)
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+                .padding(22)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .strokeBorder(.white.opacity(0.16), lineWidth: 1)
                 }
             }
         }
@@ -303,58 +379,78 @@ struct MachineScreen: View {
     private func centered(@ViewBuilder _ content: () -> some View) -> some View {
         content()
             .padding(24)
-            .frame(maxWidth: 380)
+            .frame(maxWidth: 430)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var needsJIT: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "bolt.slash.fill")
-                .font(.system(size: 44))
-                .foregroundStyle(.yellow)
-            Text("JIT Is Off")
-                .font(.title2.bold())
-            Text("crate needs JIT to run \(machine.name). Turn it on, then the VM starts.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button {
-                Task { await jit.turnOn(JITMethod(rawValue: jitMethod) ?? .standard) }
-            } label: {
-                if jit.isTurningOn {
-                    ProgressView().frame(maxWidth: .infinity)
-                } else {
-                    Label("Turn On JIT", systemImage: "bolt.fill")
-                        .font(.headline)
+        AuroraCard(tint: AuroraPalette.amber) {
+            VStack(spacing: 14) {
+                Image(systemName: "bolt.slash.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(AuroraPalette.warning)
+                Text(l10n: "machine.jitOff.title")
+                    .font(AuroraType.section)
+                    .foregroundStyle(AuroraPalette.textPrimary)
+                Text(verbatim: L10n.format("machine.jitOff.message", machine.name))
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(AuroraPalette.textSecondary)
+                Button {
+                    Task { await jit.turnOn(JITMethod(rawValue: jitMethod) ?? .standard) }
+                } label: {
+                    if jit.isTurningOn {
+                        ProgressView()
+                            .tint(.white)
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Label {
+                            Text(l10n: "jit.turnOn")
+                        } icon: {
+                            Image(systemName: "bolt.fill")
+                        }
                         .frame(maxWidth: .infinity)
+                    }
                 }
+                .buttonStyle(AuroraPrimaryButtonStyle(fullWidth: true))
+                .disabled(jit.isTurningOn)
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .controlSize(.large)
-            .disabled(jit.isTurningOn)
         }
-        .padding(24)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
     }
 
     private func ended(_ message: String, failed: Bool) -> some View {
-        VStack(spacing: 14) {
-            Image(systemName: failed ? "exclamationmark.triangle.fill" : "power")
-                .font(.system(size: 40))
-                .foregroundStyle(failed ? .orange : .secondary)
-            Text(message)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button {
-                boot()
-            } label: {
-                Label("Start Again", systemImage: "play.fill")
-                    .font(.headline)
+        AuroraCard(tint: failed ? AuroraPalette.coral : AuroraPalette.cyan) {
+            VStack(spacing: 14) {
+                Image(systemName: failed ? "exclamationmark.triangle.fill" : "power")
+                    .font(.system(size: 38))
+                    .foregroundStyle(failed ? AuroraPalette.danger : AuroraPalette.textSecondary)
+                Text(verbatim: message)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(AuroraPalette.textSecondary)
+                    .textSelection(.enabled)
+                Button {
+                    boot()
+                } label: {
+                    Label {
+                        Text(l10n: "machine.startAgain")
+                    } icon: {
+                        Image(systemName: "play.fill")
+                    }
                     .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(AuroraPrimaryButtonStyle(fullWidth: true))
+
+                if failed, let logURL {
+                    ShareLink(item: logURL) {
+                        Label {
+                            Text(l10n: "logs.export")
+                        } icon: {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(AuroraSecondaryButtonStyle(fullWidth: true))
+                }
             }
-            .buttonStyle(.borderedProminent)
-            .buttonBorderShape(.capsule)
-            .controlSize(.large)
         }
     }
 
@@ -370,8 +466,10 @@ struct MachineScreen: View {
             VStack(spacing: 12) {
                 ProgressView()
                     .controlSize(.large)
-                Text("Starting \(machine.name)…")
-                    .font(.headline)
+                    .tint(AuroraPalette.accent)
+                Text(verbatim: L10n.format("machine.starting", machine.name))
+                    .font(AuroraType.headline)
+                    .foregroundStyle(.white)
             }
         }
     }
