@@ -139,15 +139,6 @@ struct HomeScreen: View {
                     }
                 }
                 .buttonStyle(AuroraPrimaryButtonStyle())
-
-                Button(action: onSettings) {
-                    Label {
-                        Text(l10n: "tab.settings")
-                    } icon: {
-                        Image(systemName: "slider.horizontal.3")
-                    }
-                }
-                .buttonStyle(AuroraSecondaryButtonStyle())
                 Spacer(minLength: 0)
             }
         }
