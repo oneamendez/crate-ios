@@ -32,7 +32,7 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
     private static let superKey: UInt16 = 125
 
     private struct Key {
-        let button: UIButton
+        let control: UIControl
         /// Key codes pressed in order and released in reverse; nil for a key
         /// that isn't a keystroke (Ctrl, Super, dismiss).
         let codes: [UInt16]?
@@ -44,6 +44,37 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
     private var trailing: [Key] = []
     private var controlButton: UIButton!
     private var superButton: UIButton!
+    /// Apple's explicit paste affordance: it enables itself only for text and
+    /// does not make Crate inspect the clipboard before the person taps it.
+    private lazy var pasteControl: UIPasteControl = {
+        let configuration = UIPasteControl.Configuration()
+        configuration.displayMode = .iconOnly
+        configuration.cornerRadius = 5
+        configuration.baseForegroundColor = Self.labelColor
+        configuration.baseBackgroundColor = Self.darkKeyColor
+        let control = UIPasteControl(configuration: configuration)
+        control.accessibilityLabel = "Paste from Clipboard"
+        control.layer.shadowOffset = CGSize(width: 0, height: 1)
+        control.layer.shadowRadius = 0
+        control.layer.shadowOpacity = 0.35
+        // UIPasteControl's own glyph can disappear when the phone gives this
+        // narrow accessory-bar slot a width below its intrinsic size. Keep the
+        // privacy-preserving system control, but draw an always-centred symbol
+        // that remains legible at every Duo posture.
+        let glyph = UIImageView(image: UIImage(systemName: "doc.on.clipboard"))
+        glyph.tintColor = Self.labelColor
+        glyph.contentMode = .scaleAspectFit
+        glyph.isUserInteractionEnabled = false
+        glyph.translatesAutoresizingMaskIntoConstraints = false
+        control.addSubview(glyph)
+        NSLayoutConstraint.activate([
+            glyph.centerXAnchor.constraint(equalTo: control.centerXAnchor),
+            glyph.centerYAnchor.constraint(equalTo: control.centerYAnchor),
+            glyph.widthAnchor.constraint(equalToConstant: 17),
+            glyph.heightAnchor.constraint(equalToConstant: 17),
+        ])
+        return control
+    }()
     /// What each held button pressed, so its release undoes exactly that.
     private var held: [ObjectIdentifier: [UInt16]] = [:]
     private var labelsAreNarrow = false
@@ -70,8 +101,8 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
         superButton.addTarget(self, action: #selector(toggleLatch(_:)), for: .touchDown)
         leading = [
             key(title: "esc", dark: true, codes: [1]),
-            Key(button: controlButton, codes: nil),
-            Key(button: superButton, codes: nil),
+            Key(control: controlButton, codes: nil),
+            Key(control: superButton, codes: nil),
             key(icon: "arrow.right.to.line.compact", dark: true, codes: [15]),
         ]
         symbols = ["~", "|", "/", "-"].compactMap { text in
@@ -86,21 +117,22 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
         dismiss.addTarget(self, action: #selector(dismissKeyboard), for: .touchUpInside)
         dismiss.accessibilityLabel = "Hide Keyboard"
         trailing = [
+            Key(control: pasteControl, codes: nil),
             key(icon: "arrow.left", dark: false, codes: [105]),
             key(icon: "arrow.down", dark: false, codes: [108]),
             key(icon: "arrow.up", dark: false, codes: [103]),
             key(icon: "arrow.right", dark: false, codes: [106]),
-            Key(button: dismiss, codes: nil),
+            Key(control: dismiss, codes: nil),
         ]
-        leading[0].button.accessibilityLabel = "Escape"
+        leading[0].control.accessibilityLabel = "Escape"
         controlButton.accessibilityLabel = "Control"
         superButton.accessibilityLabel = "Super"
-        leading[3].button.accessibilityLabel = "Tab"
-        for (key, name) in zip(trailing, ["Left", "Down", "Up", "Right"]) {
-            key.button.accessibilityLabel = name
+        leading[3].control.accessibilityLabel = "Tab"
+        for (key, name) in zip(trailing.dropFirst(), ["Left", "Down", "Up", "Right"]) {
+            key.control.accessibilityLabel = name
         }
         for key in leading + symbols + functionKeys + trailing {
-            addSubview(key.button)
+            addSubview(key.control)
         }
     }
 
@@ -108,12 +140,12 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
         let button = makeButton(title: title, icon: icon, dark: dark)
         button.addTarget(self, action: #selector(press(_:)), for: .touchDown)
         button.addTarget(self, action: #selector(release(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-        return Key(button: button, codes: codes)
+        return Key(control: button, codes: codes)
     }
 
     @objc private func press(_ sender: UIButton) {
         guard let codes = (leading + symbols + functionKeys + trailing)
-            .first(where: { $0.button === sender })?.codes else { return }
+            .first(where: { $0.control === sender })?.codes else { return }
         UIDevice.current.playInputClick()
         let pressed = takeModifiers() + codes
         held[ObjectIdentifier(sender)] = pressed
@@ -157,6 +189,12 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
         latched = []
     }
 
+    /// ScreenView owns the paste configuration and receives the item provider;
+    /// UIPasteControl keeps this target weak.
+    func setPasteTarget(_ target: UIPasteConfigurationSupporting) {
+        pasteControl.target = target
+    }
+
     // MARK: - Layout
 
     /// SwiftTerm's arrangement, plus Super: Esc, Ctrl, Super and Tab at the
@@ -175,31 +213,45 @@ final class DisplayKeyBar: UIInputView, UIInputViewAudioFeedback {
         // Narrow screens swap the Esc and Ctrl labels for symbols, as SwiftTerm does.
         if narrow != labelsAreNarrow {
             labelsAreNarrow = narrow
-            setLabel(leading[0].button, title: narrow ? nil : "esc", icon: narrow ? "escape" : nil)
+            if let escapeButton = leading[0].control as? UIButton {
+                setLabel(escapeButton, title: narrow ? nil : "esc", icon: narrow ? "escape" : nil)
+            }
             setLabel(controlButton, title: narrow ? nil : "ctrl", icon: narrow ? "control" : nil)
         }
 
-        let fixed = leading + symbols + trailing
-        let fixedWidth = CGFloat(fixed.count) * (minimum + pad) + pad
-        let spare = max(0, bounds.width - fixedWidth)
-        let fitting = min(functionKeys.count, Int(spare / (minimum + pad)))
-        let leftover = spare - CGFloat(fitting) * (minimum + pad)
-        let wide = minimum + leftover / CGFloat(fixed.count)
+        // Paste is more useful than a symbol or function key on the narrowest
+        // phone keyboard. Keep the leading/trailing controls, then fit as many
+        // symbols and function keys as the remaining width permits.
+        let coreCount = leading.count + trailing.count
+        let coreWidth = CGFloat(coreCount) * (minimum + pad) + pad
+        let spareSlots = max(0, Int((bounds.width - coreWidth) / (minimum + pad)))
+        let symbolCount = min(symbols.count, spareSlots)
+        let functionCount = min(functionKeys.count, spareSlots - symbolCount)
+        let wideCount = coreCount + symbolCount
+        let used = CGFloat(wideCount + functionCount) * (minimum + pad) + pad
+        let leftover = max(0, bounds.width - used)
+        let wide = minimum + leftover / CGFloat(wideCount)
 
         var x = pad
-        for key in leading + symbols {
-            key.button.frame = CGRect(x: x, y: 4, width: wide, height: height)
+        for key in leading {
+            key.control.frame = CGRect(x: x, y: 4, width: wide, height: height)
+            x += wide + pad
+        }
+        for (index, key) in symbols.enumerated() {
+            key.control.isHidden = index >= symbolCount
+            guard index < symbolCount else { continue }
+            key.control.frame = CGRect(x: x, y: 4, width: wide, height: height)
             x += wide + pad
         }
         for (index, key) in functionKeys.enumerated() {
-            key.button.isHidden = index >= fitting
-            guard index < fitting else { continue }
-            key.button.frame = CGRect(x: x, y: 4, width: minimum, height: height)
+            key.control.isHidden = index >= functionCount
+            guard index < functionCount else { continue }
+            key.control.frame = CGRect(x: x, y: 4, width: minimum, height: height)
             x += minimum + pad
         }
         var right = bounds.width - pad
         for key in trailing.reversed() {
-            key.button.frame = CGRect(x: right - wide, y: 4, width: wide, height: height)
+            key.control.frame = CGRect(x: right - wide, y: 4, width: wide, height: height)
             right -= wide + pad
         }
     }

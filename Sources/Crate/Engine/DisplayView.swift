@@ -27,10 +27,17 @@ struct DisplayView: UIViewRepresentable {
     /// Where in the view the picture goes, when not all of it is open: above
     /// the fold, with iPhone Duo half open like a laptop.
     var openRegion: CGRect?
+    /// The Duo is unfolded and upright: use all of the inner display like a
+    /// small iPad, including a guest desktop with a portrait resolution.
+    var usesPortraitDesktop = false
+    /// Immersive mode has no visible app chrome: three fingers on the guest
+    /// bring it back without reserving a hot edge over Linux's own controls.
+    var onShowControls: () -> Void = {}
 
     func makeUIView(context: Context) -> ScreenView {
-        let view = ScreenView(bridge: bridge)
+        let view = ScreenView(bridge: bridge, usesPortraitDesktop: usesPortraitDesktop)
         view.onKeyboardHidden = { showsKeyboard = false }
+        view.onShowControls = onShowControls
         let hasPicture = $hasPicture
         // No screen is the VM stopping, which MachineScreen shows in place
         // of this view.
@@ -45,6 +52,8 @@ struct DisplayView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: ScreenView, context: Context) {
+        view.usesPortraitDesktop = usesPortraitDesktop
+        view.onShowControls = onShowControls
         view.openRegion = openRegion
         if showsKeyboard, !view.isFirstResponder {
             view.becomeFirstResponder()
@@ -61,6 +70,7 @@ struct DisplayView: UIViewRepresentable {
     final class ScreenView: UIView, UIKeyInput, UIGestureRecognizerDelegate, UIPointerInteractionDelegate {
         let bridge: DisplayBridge
         var onKeyboardHidden: (() -> Void)?
+        var onShowControls: (() -> Void)?
         private var imageSize = CGSize.zero
         private var scrollCarry = CGPoint.zero
         /// The buttons the guest last heard were down, which the pointer
@@ -128,9 +138,21 @@ struct DisplayView: UIViewRepresentable {
             }
         }
 
-        init(bridge: DisplayBridge) {
+        var usesPortraitDesktop: Bool {
+            didSet {
+                guard usesPortraitDesktop != oldValue else { return }
+                fit()
+            }
+        }
+
+        init(bridge: DisplayBridge, usesPortraitDesktop: Bool) {
             self.bridge = bridge
+            self.usesPortraitDesktop = usesPortraitDesktop
             super.init(frame: .zero)
+            // UIPasteControl reads the clipboard only after its explicit tap,
+            // avoiding iOS's cross-app paste privacy prompt while accepting
+            // the plain text Crate can type through the virtual keyboard.
+            pasteConfiguration = UIPasteConfiguration(forAccepting: NSString.self)
             backgroundColor = .black
             picture.magnificationFilter = .linear
             layer.addSublayer(picture)
@@ -177,8 +199,12 @@ struct DisplayView: UIViewRepresentable {
             twoFingerTap.addTarget(self, action: #selector(twoFingerTapped))
             twoFingerTap.numberOfTouchesRequired = 2
             twoFingerTap.isEnabled = false
+            let showControls = UITapGestureRecognizer(target: self, action: #selector(showControls))
+            showControls.numberOfTouchesRequired = 3
+            showControls.cancelsTouchesInView = false
 
-            for recognizer in [tap, drag, hold, scroll, wheel, glide, hover, rightClick, middleClick, twoFingerTap] {
+            for recognizer in [tap, drag, hold, scroll, wheel, glide, hover, rightClick, middleClick,
+                               twoFingerTap, showControls] {
                 recognizer.delegate = self
                 addGestureRecognizer(recognizer)
             }
@@ -248,7 +274,8 @@ struct DisplayView: UIViewRepresentable {
             if let openRegion {
                 bridge.fit(openRegion.intersection(bounds).size, window: nil)
             } else {
-                bridge.fit(bounds.size, window: window?.bounds.size ?? bounds.size)
+                bridge.fit(bounds.size, window: window?.bounds.size ?? bounds.size,
+                           portrait: usesPortraitDesktop)
             }
         }
 
@@ -349,6 +376,11 @@ struct DisplayView: UIViewRepresentable {
 
         @objc private func twoFingerTapped(_ recognizer: UITapGestureRecognizer) {
             clickAtPointer(2)
+        }
+
+        @objc private func showControls(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended else { return }
+            onShowControls?()
         }
 
         private func click(_ recognizer: UIGestureRecognizer, buttons: UInt32) {
@@ -544,6 +576,7 @@ struct DisplayView: UIViewRepresentable {
             let bar = DisplayKeyBar()
             bar.onKey = { [weak self] code, down in self?.bridge.key(code, down: down) }
             bar.onDismiss = { [weak self] in _ = self?.resignFirstResponder() }
+            bar.setPasteTarget(self)
             return bar
         }()
 
@@ -577,6 +610,21 @@ struct DisplayView: UIViewRepresentable {
             }
         }
 
+        /// Receives text from the system Paste control in DisplayKeyBar. The
+        /// item provider is loaded without ever recording the clipboard text.
+        override func paste(itemProviders: [NSItemProvider]) {
+            guard let provider = itemProviders.first(where: {
+                $0.canLoadObject(ofClass: NSString.self)
+            }) else { return }
+            provider.loadObject(ofClass: NSString.self) { [weak self] object, error in
+                guard error == nil, let text = object as? NSString else {
+                    AppLog.write("clipboard: could not load pasted text")
+                    return
+                }
+                self?.bridge.typeClipboardText(text as String)
+            }
+        }
+
         /// The key bar's latched Ctrl and Super, held around a keystroke from
         /// the on-screen keyboard.
         private func withLatchedModifiers(_ keystroke: () -> Void) {
@@ -597,6 +645,11 @@ struct DisplayView: UIViewRepresentable {
         var smartDashesType: UITextSmartDashesType = .no
         var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
         var keyboardType: UIKeyboardType = .asciiCapable
+        /// Lets iOS offer verification codes it detects in Messages and Mail
+        /// above the keyboard. Selecting one calls insertText just like typing,
+        /// so the focused field inside the VM receives it without Crate reading
+        /// either app or learning what the code was.
+        var textContentType: UITextContentType? = .oneTimeCode
 
         /// A hardware keyboard: each key down and up as itself, modifiers
         /// included, which iOS's text input would lose.

@@ -6,6 +6,39 @@ import CrateEngine
 import Foundation
 import Observation
 
+/// State shared with crate's C log callback. virglrenderer can emit hundreds
+/// of thousands of lines after ANGLE reports a lost GPU context; suppressing
+/// everything after the first fatal line keeps that failure from turning into
+/// an I/O and main-thread starvation loop while MachineRunner stops the VM.
+private final class EngineLogContext: @unchecked Sendable {
+    struct Decision {
+        let shouldLog: Bool
+        let stopForLostGPU: Bool
+    }
+
+    weak var runner: MachineRunner?
+    private let lock = NSLock()
+    private var gpuContextIsLost = false
+
+    func reset() {
+        lock.withLock { gpuContextIsLost = false }
+    }
+
+    func decision(for message: String) -> Decision {
+        lock.withLock {
+            if gpuContextIsLost { return Decision(shouldLog: false, stopForLostGPU: false) }
+            let lost = message.contains("EGL error 0x300e")
+                || message.contains("GL error reported (1287)")
+                || message.contains("Failed to create fence sync object")
+            if lost {
+                gpuContextIsLost = true
+                return Decision(shouldLog: true, stopForLostGPU: true)
+            }
+            return Decision(shouldLog: true, stopForLostGPU: false)
+        }
+    }
+}
+
 /// The VM that's running, on crate (Frameworks/Crate.xcframework, built from
 /// the crate repository by Scripts/build-crate.sh).
 ///
@@ -31,8 +64,16 @@ final class MachineRunner {
     /// The VM this runner is running, or last ran.
     private(set) var machineID: Machine.ID?
     let console = ConsoleBridge()
+    let credentialConsole: CredentialConsoleBridge
+    /// Retained for the app's lifetime because the transport deliberately
+    /// holds its delegate weakly. One controller follows Crate's one VM.
+    let securityKey: SecurityKeyController
     let display = DisplayBridge()
+    let audio = AudioBridge()
     private var machine: OpaquePointer?
+    private var credentialSession: CredentialConsoleBridge.Session?
+    private let engineLogContext = EngineLogContext()
+    private var forcedStopMessage: String?
     /// crate's memory in the log while the VM runs.
     private let memoryLog = MemoryLog()
     #if DEBUG
@@ -40,11 +81,26 @@ final class MachineRunner {
     #endif
 
     init() {
-        crate_set_log_callback({ _, level, message in
-            guard let message else { return }
+        let credentialConsole = CredentialConsoleBridge()
+        self.credentialConsole = credentialConsole
+        securityKey = SecurityKeyController(
+            bridge: credentialConsole,
+            backend: SecurityKeyBackendRouter()
+        )
+        engineLogContext.runner = self
+        let context = Unmanaged.passUnretained(engineLogContext).toOpaque()
+        crate_set_log_callback({ context, level, message in
+            guard let context, let message else { return }
+            let logContext = Unmanaged<EngineLogContext>.fromOpaque(context).takeUnretainedValue()
+            let text = String(cString: message)
+            let decision = logContext.decision(for: text)
+            guard decision.shouldLog else { return }
             let tag = level == CRATE_LOG_ERROR ? "crate error: " : level == CRATE_LOG_WARN ? "crate warning: " : "crate: "
-            AppLog.write(tag + String(cString: message))
-        }, nil, Self.logLevel)
+            AppLog.write(tag + text)
+            if decision.stopForLostGPU {
+                Task { @MainActor in logContext.runner?.stopForLostGPU() }
+            }
+        }, context, Self.logLevel)
     }
 
     var isRunning: Bool {
@@ -66,6 +122,11 @@ final class MachineRunner {
     func start(_ vm: Machine, region: crate_code_region) {
         guard !isRunning else { return }
         if let old = machine {
+            if let credentialSession {
+                credentialConsole.detach(credentialSession)
+                self.credentialSession = nil
+            }
+            audio.detach()
             crate_machine_free(old)
             machine = nil
         }
@@ -82,23 +143,40 @@ final class MachineRunner {
         }
         phase = .starting
         machineID = vm.id
+        forcedStopMessage = nil
+        engineLogContext.reset()
+        GuestToolServer.shared.start()
         console.reset()
         display.reset()
+        let credentialConsole = self.credentialConsole
+        let credentialSession = credentialConsole.reset()
         let settings = Settings(vm: vm, files: files, display: display)
         AppLog.write("vm: starting \(vm.name): \(settings.cpus) CPUs, \(settings.memoryMiB) MiB, "
                      + "code \(region.size >> 20) MiB; \(settings.commandLine)")
         let console = self.console
         let display = self.display
+        let audio = self.audio
         let context = Unmanaged.passUnretained(self).toOpaque()
         Task.detached(priority: .userInitiated) {
             let started = Date.now
-            let result = Self.create(settings, region: region, console: console, display: display, context: context)
+            let result = Self.create(settings, region: region, console: console, display: display,
+                                     audio: audio, credentialConsole: credentialConsole,
+                                     credentialSession: credentialSession, context: context)
             await MainActor.run {
                 switch result {
                 case .success(let made):
+                    guard credentialConsole.attach(machine: made, in: credentialSession) else {
+                        credentialConsole.detach(credentialSession)
+                        crate_machine_free(made)
+                        GuestToolServer.shared.stop()
+                        self.phase = .failed("crate couldn't attach the credential console to the VM.")
+                        return
+                    }
                     self.machine = made
+                    self.credentialSession = credentialSession
                     console.attach(machine: made)
                     display.attach(machine: made)
+                    audio.attach(machine: made)
                     if crate_machine_start(made) == CRATE_OK {
                         AppLog.write(String(format: "vm: running, created in %.2f s", Date.now.timeIntervalSince(started)))
                         self.phase = .running
@@ -107,10 +185,15 @@ final class MachineRunner {
                         self.debugHooks.start(console: console, display: display)
                         #endif
                     } else {
+                        credentialConsole.detach(credentialSession)
+                        self.credentialSession = nil
+                        audio.detach()
+                        GuestToolServer.shared.stop()
                         self.phase = .failed("crate couldn't start the VM: \(String(cString: crate_last_error())).")
                     }
                 case .failure(let message):
                     AppLog.write("vm: \(message)")
+                    GuestToolServer.shared.stop()
                     self.phase = .failed(message)
                 }
             }
@@ -121,6 +204,12 @@ final class MachineRunner {
     /// no power button yet to ask the guest to shut down.
     func stop() {
         guard let machine, isRunning else { return }
+        // Stop accepting authenticator work before crate asks its vCPUs to
+        // stop. A backend response arriving during shutdown is then stale.
+        if let credentialSession {
+            credentialConsole.detach(credentialSession)
+            self.credentialSession = nil
+        }
         crate_machine_kill(machine)
     }
 
@@ -174,7 +263,15 @@ final class MachineRunner {
             let asked = askedGB * 1024
             let available = Int(os_proc_available_memory() >> 20)
             guard available > 0 else { return asked }
-            let headroom = 768
+            // The JIT region is already in the footprint reflected by
+            // `available`, but virgl, ANGLE, frame buffers and the rest of the
+            // VM grow well beyond guest RAM under a heavy desktop workload.
+            // With a 1920x1080 KDE desktop, Chromium and Electron, a 1792 MiB
+            // reserve still let the process reach 5.75 of its 6 GiB limit;
+            // iOS warned at 4.9 GiB, then ANGLE lost its GPU context. Keep
+            // 2688 MiB beyond guest RAM so the GPU and iOS retain about 1.3
+            // GiB during that measured workload instead of a few hundred MiB.
+            let headroom = 2688
             let fits = max(1024, (available - headroom) / 2 * 2)
             return min(asked, fits)
         }
@@ -214,7 +311,14 @@ final class MachineRunner {
 
     nonisolated private static func create(_ settings: Settings, region: crate_code_region,
                                            console: ConsoleBridge, display: DisplayBridge,
+                                           audio: AudioBridge,
+                                           credentialConsole: CredentialConsoleBridge,
+                                           credentialSession: CredentialConsoleBridge.Session,
                                            context: UnsafeMutableRawPointer) -> Created {
+        var keepCredentialSession = false
+        defer {
+            if !keepCredentialSession { credentialConsole.detach(credentialSession) }
+        }
         guard let config = crate_config_new("virt") else { return .failure("crate doesn't know the virt board.") }
         defer { crate_config_free(config) }
         func check(_ status: crate_status, _ what: String) -> String? {
@@ -243,6 +347,18 @@ final class MachineRunner {
                 return check(crate_config_add_console(config, CRATE_CONSOLE_SERIAL, &callbacks, &index), "the console")
             },
             {
+                var callbacks = credentialConsole.callbacks
+                var index: UInt32 = 0
+                if let failure = check(crate_config_add_console(config, CRATE_CONSOLE_VIRTIO, &callbacks, &index),
+                                       "the credential console") {
+                    return failure
+                }
+                guard credentialConsole.configure(index: index, in: credentialSession) else {
+                    return "the credential console session changed while crate was building the VM."
+                }
+                return nil
+            },
+            {
                 var callbacks = display.callbacks
                 var index: UInt32 = 0
                 if let failure = check(crate_config_add_display(config, Settings.gpu, &callbacks, &index), "the display") {
@@ -250,6 +366,11 @@ final class MachineRunner {
                 }
                 let modes = settings.displayModes
                 return check(crate_config_set_display_modes(config, index, modes, modes.count), "the display's sizes")
+            },
+            {
+                var callbacks = audio.callbacks
+                var index: UInt32 = 0
+                return check(crate_config_add_sound(config, &callbacks, &index), "the sound card")
             },
             { check(crate_config_add_input(config, CRATE_INPUT_KEYBOARD | CRATE_INPUT_TABLET), "the keyboard and tablet") },
             {
@@ -267,24 +388,37 @@ final class MachineRunner {
         var made: OpaquePointer?
         if let failure = check(crate_machine_create(config, &made), "to create the VM") { return .failure(failure) }
         guard let made else { return .failure("crate made no VM.") }
+        keepCredentialSession = true
         return .success(made)
     }
 
     private func stopped(_ reason: crate_stop_reason, error: String?) {
         let text: String
-        switch reason {
-        case CRATE_STOP_POWER_OFF: text = "The VM shut down."
-        case CRATE_STOP_RESET: text = "The VM asked to restart."
-        case CRATE_STOP_KILLED: text = "The VM was stopped."
-        default: text = "The VM stopped: \(error ?? "crate gave no reason")."
+        let forced = forcedStopMessage
+        forcedStopMessage = nil
+        if let forced {
+            text = forced
+        } else {
+            switch reason {
+            case CRATE_STOP_POWER_OFF: text = "The VM shut down."
+            case CRATE_STOP_RESET: text = "The VM asked to restart."
+            case CRATE_STOP_KILLED: text = "The VM was stopped."
+            default: text = "The VM stopped: \(error ?? "crate gave no reason")."
+            }
         }
         AppLog.write("vm: \(text)")
         memoryLog.stop()
         #if DEBUG
         debugHooks.stop()
         #endif
+        if let credentialSession {
+            credentialConsole.detach(credentialSession)
+            self.credentialSession = nil
+        }
         console.detach()
         display.detach()
+        audio.detach()
+        GuestToolServer.shared.stop()
         // Its memory goes back now rather than when the next VM starts: the
         // guest's RAM counts against crate's limit, which an install
         // meanwhile needs.
@@ -293,6 +427,16 @@ final class MachineRunner {
             self.machine = nil
             AppLog.write("vm: freed, footprint \(MemoryReport().footprint >> 20) MiB")
         }
-        phase = reason == CRATE_STOP_ERROR ? .failed(text) : .stopped(text)
+        phase = forced != nil || reason == CRATE_STOP_ERROR ? .failed(text) : .stopped(text)
+    }
+
+    /// A lost ANGLE/Metal context cannot recover in-place. Stop promptly: if
+    /// the guest keeps submitting commands, virglrenderer's failed fences can
+    /// otherwise consume every CPU with logging and make Crate appear frozen.
+    private func stopForLostGPU() {
+        guard let machine, isRunning, forcedStopMessage == nil else { return }
+        forcedStopMessage = "The VM stopped because iOS reset its GPU under memory pressure. Restart it; Crate reserved more GPU headroom for the next run."
+        AppLog.write("vm: stopping after the GPU context was lost")
+        crate_machine_kill(machine)
     }
 }

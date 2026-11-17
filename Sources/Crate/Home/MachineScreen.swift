@@ -14,7 +14,10 @@ struct MachineScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(JITSession.self) private var jit
     @Environment(MachineRunner.self) private var runner
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(SettingsKey.jitMethod) private var jitMethod = JITMethod.standard.rawValue
+    @AppStorage(SettingsKey.externalDisplayLayout)
+    private var externalDisplayLayout = ExternalDisplayLayoutMode.standard.rawValue
 
     @State private var confirmingStop = false
     @State private var showing = Showing.display
@@ -33,6 +36,11 @@ struct MachineScreen: View {
     @State private var sharing: Screenshot?
     /// The display's white flash as a screenshot is taken.
     @State private var flash = false
+    @State private var showingSecurityKey = false
+    /// Nothing but the guest, edge to edge. A three-finger tap brings the
+    /// controls back (DisplayView).
+    @State private var isImmersive = false
+    @State private var showsImmersiveHint = false
 
     /// The VM's screen, or its console.
     enum Showing: Hashable {
@@ -59,6 +67,9 @@ struct MachineScreen: View {
                 .overlay(alignment: .bottomLeading) {
                     if let screenshot { thumbnail(screenshot) }
                 }
+                .overlay(alignment: .top) {
+                    SecurityKeyBanner(controller: runner.securityKey)
+                }
                 .background(Color.black.ignoresSafeArea())
                 .modifier(MachineTitle(title: "\(machine.name) \(machine.version)"))
                 .navigationBarTitleDisplayMode(.inline)
@@ -74,7 +85,28 @@ struct MachineScreen: View {
                         .presentationDetents([.medium, .large])
                         .ignoresSafeArea()
                 }
+                .sheet(isPresented: $showingSecurityKey) {
+                    SecurityKeyStatusView(controller: runner.securityKey)
+                        .presentationDetents([.medium, .large])
+                        .preferredColorScheme(nil)
+                }
                 .sensoryFeedback(.impact(weight: .light), trigger: screenshot?.id)
+        }
+        .toolbarVisibility(isImmersive ? .hidden : .automatic, for: .navigationBar)
+        .statusBarHidden(isImmersive)
+        .persistentSystemOverlays(isImmersive ? .hidden : .automatic)
+        .ignoresSafeArea(.container, edges: isImmersive ? .all : [])
+        .overlay(alignment: .top) {
+            if isImmersive && showsImmersiveHint {
+                Label("Three-finger tap for controls", systemImage: "hand.tap")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.top, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
         }
         // A connected display shows the VM's screen while this is up, the
         // console included (ExternalDisplay).
@@ -82,6 +114,14 @@ struct MachineScreen: View {
         .preferredColorScheme(.dark)
         .modifier(FollowsHinge(folds: $folds, isOpen: $isOpen))
         .task(id: jit.isOn) { boot() }
+        .onAppear { HardwareMouse.shared.start(bridge: runner.display) }
+        .onDisappear { HardwareMouse.shared.stop() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { runner.securityKey.suspend() }
+        }
+        .onChange(of: isRunning) { _, running in
+            if !running { leaveImmersive() }
+        }
         .sheet(isPresented: Bindable(jit).showingSetup) {
             JITSetupView()
                 .environment(jit)
@@ -111,12 +151,20 @@ struct MachineScreen: View {
                 Toggle("Display", systemImage: "display", isOn: shows(.display))
                 Toggle("Terminal", systemImage: "apple.terminal", isOn: shows(.console))
             }
+            ToolbarItem(placement: .secondaryAction) { securityKeyButton }
+            ToolbarItem(placement: .secondaryAction) { externalDisplayButton }
             if showing == .display {
                 if #available(iOS 27.0, *) {
                     keyboardItem.visibilityPriority(.high)
-                    ToolbarOverflowMenu { screenshotButton }
+                    ToolbarOverflowMenu {
+                        pasteButton
+                        immersiveButton
+                        screenshotButton
+                    }
                 } else {
                     keyboardItem
+                    ToolbarItem(placement: .secondaryAction) { pasteButton }
+                    ToolbarItem(placement: .secondaryAction) { immersiveButton }
                     ToolbarItem(placement: .secondaryAction) { screenshotButton }
                 }
             }
@@ -136,6 +184,67 @@ struct MachineScreen: View {
     private var screenshotButton: some View {
         Button("Take Screenshot", systemImage: "camera.viewfinder", action: takeScreenshot)
             .disabled(!hasPicture)
+    }
+
+    /// The system control reads the clipboard only after it is tapped, then
+    /// Crate types the text through the guest's ordinary virtual keyboard.
+    private var pasteButton: some View {
+        PasteButton(payloadType: String.self) { strings in
+            runner.display.typeClipboardText(strings.joined(separator: "\n"))
+        }
+    }
+
+    private var immersiveButton: some View {
+        Button("Full Screen", systemImage: "arrow.up.left.and.arrow.down.right") {
+            enterImmersive()
+        }
+        .keyboardShortcut("f", modifiers: [.control, .command])
+    }
+
+    private func enterImmersive() {
+        showsKeyboard = false
+        withAnimation(.snappy) {
+            isImmersive = true
+            showsImmersiveHint = true
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard isImmersive else { return }
+            withAnimation(.easeOut) { showsImmersiveHint = false }
+        }
+    }
+
+    private func leaveImmersive() {
+        guard isImmersive || showsImmersiveHint else { return }
+        withAnimation(.snappy) {
+            isImmersive = false
+            showsImmersiveHint = false
+        }
+    }
+
+    private var securityKeyButton: some View {
+        Button("Security Key", systemImage: "key.horizontal") {
+            showingSecurityKey = true
+        }
+    }
+
+    private var externalDisplayButton: some View {
+        Menu("External Display", systemImage: "display") {
+            ForEach(ExternalDisplayLayoutMode.allCases) { mode in
+                Button {
+                    ExternalDisplay.shared.setLayoutMode(mode)
+                } label: {
+                    Label(
+                        mode.title,
+                        systemImage: externalDisplayLayout == mode.rawValue
+                            ? "checkmark.circle.fill"
+                            : mode.icon
+                    )
+                }
+            }
+            Divider()
+            Text("Full 32:9 requires Full Wide on the monitor")
+        }
     }
 
     /// The display's screen as it is now, into Photos, with a flash over the
@@ -233,8 +342,11 @@ struct MachineScreen: View {
     private var display: some View {
         GeometryReader { proxy in
             let open = Self.aboveFold(in: proxy, after: folds)
+            let portrait = isOpen && open == nil && proxy.size.height > proxy.size.width
             DisplayView(bridge: runner.display, showsKeyboard: $showsKeyboard,
-                        hasPicture: $hasPicture, openRegion: open)
+                        hasPicture: $hasPicture, openRegion: open,
+                        usesPortraitDesktop: portrait,
+                        onShowControls: leaveImmersive)
                 .onChange(of: open) { _, open in Self.log(open, in: proxy.size) }
         }
         // The keyboard covers the desktop rather than resizing it, which the

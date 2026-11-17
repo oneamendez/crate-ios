@@ -1,0 +1,21 @@
+diff --git a/src/socket.c b/src/socket.c
+index 29430e3..c4625da 100644
+--- a/src/socket.c
++++ b/src/socket.c
+@@ -189,7 +189,15 @@ int soread(struct socket *so)
+      * soread wouldn't have been called if there weren't
+      */
+     buf_len = sopreprbuf(so, iov, &n);
+-    assert(buf_len != 0);
++    /*
++     * A hangup or socket error can be reported while the guest-facing send
++     * buffer is full. There is nowhere safe to receive into in that case;
++     * defer the read until the buffered data has drained. The next poll will
++     * then observe the data or close without aborting the whole VM host.
++     */
++    if (buf_len == 0) {
++        return 0;
++    }
+ 
+     nn = recv(so->s, iov[0].iov_base, iov[0].iov_len, 0);
+     if (nn <= 0) {

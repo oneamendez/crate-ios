@@ -1,0 +1,46 @@
+[Unit]
+Description=Crate virtual FIDO2 transport
+Documentation=file:/usr/local/share/doc/crate-fido-bridge/README.md
+After=dev-hvc0.device dev-uhid.device
+Conflicts=getty@hvc0.service serial-getty@hvc0.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/crate-fido-bridge
+ExecStart=/usr/local/libexec/crate-fido-bridge $CRATE_FIDO_ARGS
+User=crate-fido
+Group=crate-fido
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=5s
+
+# The helper needs only its two character devices. It has no network, file,
+# credential, or executable-memory role.
+DevicePolicy=closed
+DeviceAllow=/dev/uhid rw
+DeviceAllow=/dev/hvc0 rw
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -13,6 +13,11 @@ packages:
     # Pinned: 1.19.0 and later add a build-tool plugin xcodebuild can't stage
     # for an iOS destination, and main has moved to Swift 6 mode.
     exactVersion: 1.18.0
+  YubiKit:
+    url: https://github.com/Yubico/yubikit-swift
+    # 1.4.0 is the first pinned Crate integration with iOS USB smart-card
+    # support for YubiKey 5.8's FIDO2-over-CCID transport.
+    exactVersion: 1.4.0
 
 targets:
   Crate:
@@ -63,6 +68,15 @@ targets:
         NSLocalNetworkUsageDescription: crate looks for this iPhone's Remote Pairing service to turn on JIT.
         # Screenshots of a VM's screen go into Photos; crate adds, never reads.
         NSPhotoLibraryAddUsageDescription: crate saves screenshots of your VMs to Photos.
+        # Crate Passkeys keeps non-exportable keys in the Secure Enclave and
+        # requires device authentication for every registration and sign-in.
+        NSFaceIDUsageDescription: crate uses Face ID to approve passkey creation and sign-in for your Linux VMs.
+        # YubiKit's ISO 7816 NFC connection selects the standard FIDO applet.
+        # sign-ipa hides the NFC option unless the selected profile grants TAG.
+        NFCReaderUsageDescription: crate uses NFC to sign in to Linux services with your YubiKey.
+        com.apple.developer.nfc.readersession.iso7816.select-identifiers:
+          - A0000006472F0001
+        CrateNFCYubiKeyEnabled: true
         # ...and pairs this iPhone with crate by advertising as a computer.
         NSBonjourServices:
           - _remotepairing._tcp
@@ -94,11 +108,22 @@ targets:
       - framework: Frameworks/GLib.xcframework
         embed: true
       - package: SwiftTerm
+      - package: YubiKit
     # The VM's 3D: virglrenderer, libepoxy, ANGLE and MoltenVK, built by
     # Scripts/build-moltenvk.sh, build-angle.sh and build-virgl.sh. They're for
     # iPhones only and crate opens them itself, so they're copied in, not linked;
     # without them the VM still runs, in 2D.
     postBuildScripts:
+      - name: Bundle FIDO guest helper
+        basedOnDependencyAnalysis: false
+        script: |
+          DEST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          mkdir -p "$DEST"
+          COPYFILE_DISABLE=1 /usr/bin/tar -czf "$DEST/crate-fido-bridge.tar.gz" \
+            --exclude='crate-fido-bridge/test_protocol' \
+            --exclude='crate-fido-bridge/test_protocol.dSYM' \
+            --exclude='crate-fido-bridge/crate-fido-bridge' \
+            -C "$PROJECT_DIR/GuestTools" crate-fido-bridge
       - name: Embed GPU frameworks
         basedOnDependencyAnalysis: false
         script: |
@@ -126,6 +151,8 @@ targets:
         # default jetsam allowance. Settings > Memory reports what it got.
         com.apple.developer.kernel.increased-memory-limit: true
         com.apple.developer.kernel.extended-virtual-addressing: true
+        com.apple.developer.nfc.readersession.formats:
+          - TAG
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.amendez.crate

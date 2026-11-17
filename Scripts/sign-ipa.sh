@@ -28,6 +28,7 @@ set -euo pipefail
 BUNDLE_ID="${BUNDLE_ID:-com.amendez.crate}"
 HELPER_ID="$BUNDLE_ID.jithelper"
 MEMORY_ENTITLEMENTS="com.apple.developer.kernel.increased-memory-limit com.apple.developer.kernel.extended-virtual-addressing"
+NFC_ENTITLEMENT="com.apple.developer.nfc.readersession.formats"
 
 IPA="$(cd "$(dirname "${1:?usage: BUNDLE_ID=com.you.crate $0 IPA [--install DEVICE]}")" && pwd)/$(basename "$1")"
 DEVICE=""
@@ -38,6 +39,17 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Reads KEY from the decoded profile PROFILE (plutil key path; escape dots).
 profile_value() { security cms -D -i "$1" 2>/dev/null | plutil -extract "$2" raw -o - - 2>/dev/null; }
+
+# Whether PROFILE grants Core NFC tag sessions. The order is not fixed; some
+# profiles include NDEF before TAG.
+profile_has_nfc() {
+    local profile="$1" i=0 value
+    while value="$(profile_value "$profile" "Entitlements.${NFC_ENTITLEMENT//./\\.}.$i")"; do
+        [ "$value" = TAG ] && return 0
+        i=$((i + 1))
+    done
+    return 1
+}
 
 # The newest unexpired development profile for bundle ID $1, in team $2 if
 # given, or else the newest wildcard one (of that team, if given).
@@ -100,6 +112,13 @@ entitlements_for() {
             echo "        without $key: the profile doesn't grant it"
         fi
     done
+    if profile_has_nfc "$profile"; then
+        plutil -insert "${NFC_ENTITLEMENT//./\\.}" -array "$out"
+        plutil -insert "${NFC_ENTITLEMENT//./\\.}.0" -string TAG "$out"
+        echo "        with $NFC_ENTITLEMENT (TAG)"
+    else
+        echo "        without $NFC_ENTITLEMENT: NFC YubiKey stays hidden"
+    fi
 }
 
 ditto -x -k "$IPA" "$WORK/ipa"
@@ -117,6 +136,13 @@ echo "helper: $HELPER_ID, $(profile_value "$helper_profile" Name)"
 # The bundle IDs the profiles are for, in place of the ones the IPA was built with.
 plutil -replace CFBundleIdentifier -string "$BUNDLE_ID" "$APP/Info.plist"
 plutil -replace CFBundleIdentifier -string "$HELPER_ID" "$HELPER/Info.plist"
+if profile_has_nfc "$app_profile"; then
+    plutil -replace CrateNFCYubiKeyEnabled -bool true "$APP/Info.plist" 2>/dev/null || \
+        plutil -insert CrateNFCYubiKeyEnabled -bool true "$APP/Info.plist"
+else
+    plutil -replace CrateNFCYubiKeyEnabled -bool false "$APP/Info.plist" 2>/dev/null || \
+        plutil -insert CrateNFCYubiKeyEnabled -bool false "$APP/Info.plist"
+fi
 
 # codesign, quiet unless it fails.
 sign() {

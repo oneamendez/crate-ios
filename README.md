@@ -54,10 +54,18 @@ Linux images of your own, and other operating systems.
 - Ubuntu, Debian and Arch Linux ARM from a catalog, each with an account of your own
 - A disk size of your choice at install, and a memory limit you can change later
 - GPU-accelerated desktops: the guest's OpenGL runs on the iPhone's GPU
+- Linux audio through the current iOS output, including the phone speaker,
+  USB-C displays and AirPlay
 - Touch as a tablet, a hardware keyboard, or the on-screen one with a key row
   for Esc, Ctrl, Super, Tab, function keys and arrows
+- Paste text from the iPhone or iPad clipboard straight into the VM
+- One-time codes from Messages and Mail appear in the iOS keyboard suggestions
+- Device-only passkeys protected by Face ID, Touch ID or the device passcode,
+  with non-exportable keys in the Secure Enclave; an assertion-only USB-C
+  YubiKey can be selected instead
 - Supports a mouse or trackpad on iPad: wheel scrolling, right and middle click
-- An external monitor as the VM's screen, at the monitor's resolution, with the
+- An external monitor as the VM's screen, matching its aspect ratio at up to a
+  3840-pixel long edge (including ultrawide modes), with the
   iPhone or iPad as its trackpad (GNOME may need its resolution set by hand; see
   [Known issues](#known-issues))
 - iPhone Duo layouts that follow the fold
@@ -280,6 +288,10 @@ this project's own, `com.amendez.crate`.
   an external monitor, open Settings → Displays inside the VM and pick a
   resolution with the monitor's aspect ratio, such as 1920 × 1080 for a 16:9
   monitor.
+- **Crate Passkeys are not Apple Passwords.** Their private keys stay on the
+  iPhone or iPad which created them and do not sync through iCloud. Accessing
+  Apple Passwords for arbitrary websites requires Apple's browser-only managed
+  entitlement, which a VM app does not receive automatically.
 
 ## License
 

@@ -1,0 +1,18 @@
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 31ff14ec..632f90a0 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -7926,6 +7926,13 @@ static void destroy_active_markers_entry(struct hash_entry *entry)
+ 
+ void vrend_destroy_context(struct vrend_context *ctx)
+ {
++   /* A lost EGL/GL context can make vrend_create_context() fail during a
++    * renderer reset.  A later reset or shutdown still has to be safe: the
++    * renderer owns no context in that state, so there is nothing to tear
++    * down. */
++   if (!ctx)
++      return;
++
+    bool switch_0 = (ctx == vrend_state.current_ctx);
+    struct vrend_context *cur = vrend_state.current_ctx;
+    if (switch_0) {

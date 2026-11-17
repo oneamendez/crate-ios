@@ -27,7 +27,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 DEPS="$REPO/.deps"
 SRC="$DEPS/src"
 WORK="$DEPS/slirp-build"
-STAMP="glib $GLIB_VERSION, libslirp $SLIRP_VERSION"
+STAMP="glib $GLIB_VERSION, libslirp $SLIRP_VERSION + crate soread full-buffer guard"
 
 if [ "$(cat "$REPO/Frameworks/Slirp.version" 2>/dev/null)" = "$STAMP" ] \
     && [ -d "$REPO/Frameworks/Slirp.xcframework" ] && [ -d "$REPO/Frameworks/GLib.xcframework" ]; then
@@ -48,6 +48,8 @@ rm -rf "$WORK"
 mkdir -p "$WORK"
 tar -xf "$SRC/glib-$GLIB_VERSION.tar.xz" -C "$WORK"
 tar -xf "$SRC/libslirp-v$SLIRP_VERSION.tar.gz" -C "$WORK"
+patch -d "$WORK/libslirp-v$SLIRP_VERSION" -p1 \
+    < "$REPO/Scripts/patches/libslirp-soread-full-buffer.patch"
 
 # The meson cross file for one platform: iphoneos or iphonesimulator.
 cross_file() {

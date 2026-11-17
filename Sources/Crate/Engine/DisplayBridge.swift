@@ -25,6 +25,10 @@ final class DisplayBridge: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    /// Clipboard text is a burst of virtual key presses. Keep bursts in order
+    /// and off the main thread, with a small gap so a busy guest does not lose
+    /// characters as it can when every event arrives in one run-loop turn.
+    private let textInputQueue = DispatchQueue(label: "crate.display.text-input", qos: .userInitiated)
     private var machine: OpaquePointer?
     /// The machine's one display.
     private let index: UInt32 = 0
@@ -89,21 +93,25 @@ final class DisplayBridge: @unchecked Sendable {
     }
 
     /// The view is `points` big, in a window `window` big: the guest is offered
-    /// a desktop of the view's shape in landscape, and switches to it if it
-    /// follows its display's preferred mode, as a guest does by default.
+    /// a desktop of the view's shape, and switches to it if it follows its
+    /// display's preferred mode, as a guest does by default.
     ///
-    /// In portrait it gets the desktop it had in landscape in a window this
-    /// size, remembered (or, before there's been one, the portrait view's sides
-    /// swapped), so turning the iPhone changes nothing: the desktop sits
-    /// letterboxed. Folding it, a window of another size, offers a new one.
+    /// In portrait it normally gets the desktop it had in landscape in a window
+    /// this size, remembered (or, before there's been one, the portrait view's
+    /// sides swapped), so turning the iPhone changes nothing: the desktop sits
+    /// letterboxed. The unfolded Duo passes `portrait` and gets a real portrait
+    /// desktop instead. Folding it, a window of another size, offers a new one.
     ///
     /// Without a window, `points` is all there is to fill (iPhone Duo folded
     /// like a laptop, the desktop above the fold): it gets that shape, and
     /// nothing is remembered, so unfolding brings back the desktop it had.
     @MainActor
-    func fit(_ points: CGSize, window: CGSize?) {
+    func fit(_ points: CGSize, window: CGSize?, portrait: Bool = false) {
         let mode: crate_display_mode
-        if let window {
+        if portrait, points.height > points.width {
+            guard let fitted = Self.mode(fitting: points, portrait: true) else { return }
+            mode = fitted
+        } else if let window {
             let key = "display.landscape.\(Int(max(window.width, window.height)))x\(Int(min(window.width, window.height)))"
             if points.width >= points.height {
                 guard let fitted = Self.mode(fitting: points) else { return }
@@ -172,32 +180,68 @@ final class DisplayBridge: @unchecked Sendable {
     /// A guest pixel for each point, so the desktop's text is the size of the
     /// app's, but at least 600 pixels on the short side, where a desktop's
     /// windows start to fit, and at most 2560 on the long one. Multiples of 8.
-    /// Always landscape: a desktop is laid out for it, and in a portrait view
-    /// it sits letterboxed, the same desktop as with the iPhone on its side.
-    nonisolated static func mode(fitting points: CGSize) -> crate_display_mode? {
+    /// Normally landscape: a desktop is laid out for it, and in a portrait
+    /// view it sits letterboxed, the same desktop as with the iPhone on its
+    /// side. The unfolded Duo is large enough to be useful like a small iPad,
+    /// so it can ask for a genuinely portrait desktop instead.
+    nonisolated static func mode(fitting points: CGSize, portrait: Bool = false) -> crate_display_mode? {
         let short = min(points.width, points.height), long = max(points.width, points.height)
         guard short >= 100 else { return nil }
-        return landscape(long: long, short: short, scale: min(max(1, 600 / short), 2560 / long))
+        let scale = min(max(1, 600 / short), 2560 / long)
+        if portrait, points.height > points.width {
+            return oriented(width: short, height: long, scale: scale)
+        }
+        return landscape(long: long, short: short, scale: scale)
     }
 
-    /// An external display's own pixels, a guest pixel each, but at most 2560
-    /// on the long side: each frame shown is read back from the GPU and copied,
-    /// which at 4K costs far more than it shows. Multiples of 8, landscape.
+    /// An external display's own shape and, where practical, its pixels. Allow
+    /// a 5120x1440 ultrawide at native resolution, while keeping other displays
+    /// to roughly a 4K pixel budget so a 5K/6K 16:9 panel does not multiply the
+    /// GPU readback cost. Multiples of 8, landscape.
     nonisolated static func mode(forPixels pixels: CGSize) -> crate_display_mode? {
         let short = min(pixels.width, pixels.height), long = max(pixels.width, pixels.height)
         guard short >= 100 else { return nil }
-        return landscape(long: long, short: short, scale: min(1, 2560 / long))
+        let fourKPixelBudget = CGFloat(3840 * 2160)
+        let areaScale = sqrt(fourKPixelBudget / (long * short))
+        let scale = min(1, 5120 / long, areaScale)
+        return landscape(long: long, short: short, scale: scale)
     }
 
     private nonisolated static func landscape(long: CGFloat, short: CGFloat, scale: CGFloat) -> crate_display_mode {
+        oriented(width: long, height: short, scale: scale)
+    }
+
+    private nonisolated static func oriented(width: CGFloat, height: CGFloat, scale: CGFloat) -> crate_display_mode {
         let round8 = { (v: CGFloat) in UInt32(max(8, (v * scale / 8).rounded() * 8)) }
-        return crate_display_mode(width: round8(long), height: round8(short))
+        return crate_display_mode(width: round8(width), height: round8(height))
     }
 
     /// The preferred size first, then the others.
     private func list() -> [crate_display_mode] {
         guard let preferred else { return otherModes }
-        return [preferred] + otherModes.filter { $0.width != preferred.width || $0.height != preferred.height }
+        var modes = [preferred]
+        // Native 5K ultrawide is the default. Its exact half-size remains an
+        // integer-scaled, same-shape escape hatch if a workload needs less GPU
+        // bandwidth without falling back to a stretched 16:10 desktop.
+        if let external,
+           max(external.width, external.height) >= 3_000,
+           min(external.width, external.height) >= 1_200 {
+            let performance = crate_display_mode(
+                width: max(8, external.width / 16 * 8),
+                height: max(8, external.height / 16 * 8)
+            )
+            if !modes.contains(where: {
+                $0.width == performance.width && $0.height == performance.height
+            }) {
+                modes.append(performance)
+            }
+        }
+        modes.append(contentsOf: otherModes.filter { candidate in
+            !modes.contains(where: {
+                $0.width == candidate.width && $0.height == candidate.height
+            })
+        })
+        return modes
     }
 
     /// Tells a running machine about a new preferred size.
@@ -292,6 +336,36 @@ final class DisplayBridge: @unchecked Sendable {
         lock.withLock {
             guard let machine else { return }
             crate_input_key(machine, code, down)
+        }
+    }
+
+    /// Types plain text from iOS into whatever has focus in the guest. This is
+    /// deliberately keyboard input rather than a guest clipboard protocol, so
+    /// it works in every catalog image, at a login prompt, and in a terminal
+    /// without installing an agent. Characters outside the guest's US-ASCII
+    /// keyboard map are skipped rather than changed into something surprising.
+    func typeClipboardText(_ text: String) {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let strokes = normalized.compactMap(LinuxKeys.stroke(for:))
+        guard !strokes.isEmpty else {
+            AppLog.write("clipboard: no keyboard characters to paste")
+            return
+        }
+        let skipped = normalized.count - strokes.count
+
+        textInputQueue.async { [weak self] in
+            guard let self else { return }
+            for stroke in strokes {
+                if stroke.shift { self.key(LinuxKeys.leftShift, down: true) }
+                self.key(stroke.code, down: true)
+                self.key(stroke.code, down: false)
+                if stroke.shift { self.key(LinuxKeys.leftShift, down: false) }
+                Thread.sleep(forTimeInterval: 0.003)
+            }
+            AppLog.write("clipboard: pasted \(strokes.count) keyboard characters"
+                         + (skipped == 0 ? "" : ", skipped \(skipped) unsupported"))
         }
     }
 

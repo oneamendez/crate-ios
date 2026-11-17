@@ -4,6 +4,7 @@ DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 *.xcuserstate
+*.dSYM/
 
 # XcodeGen output (regenerate with `xcodegen generate`)
 Crate.xcodeproj/
@@ -19,3 +20,7 @@ Crate.xcodeproj/
 *.log
 Frameworks/
 .deps/
+
+# Native guest-tool build products
+/GuestTools/crate-fido-bridge/crate-fido-bridge
+/GuestTools/crate-fido-bridge/test_protocol

@@ -1,0 +1,4 @@
+# Only the dedicated service account may create UHID devices or claim Crate's
+# first virtio console. This grants no human login account device access.
+KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="crate-fido", MODE="0660"
+KERNEL=="hvc0", SUBSYSTEM=="tty", GROUP="crate-fido", MODE="0660"

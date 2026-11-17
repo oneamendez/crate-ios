@@ -57,6 +57,16 @@ enum LinuxKeys {
         0x40: 65, 0x41: 66, 0x42: 67, 0x43: 68, 0x44: 87, 0x45: 88,  // F7 to F12
         0x49: 110, 0x4A: 102, 0x4B: 104, 0x4C: 111, 0x4D: 107, 0x4E: 109,  // Insert Home PgUp Delete End PgDn
         0x4F: 106, 0x50: 105, 0x51: 108, 0x52: 103,  // Right Left Down Up
+        // Numeric keypad. Apple's full-size keyboards label HID Num Lock as Clear;
+        // Linux expects KEY_NUMLOCK before the keypad digits produce numbers.
+        0x53: 69,                                   // Keypad Num Lock / Clear
+        0x54: 98, 0x55: 55, 0x56: 74, 0x57: 78,    // Keypad / * - +
+        0x58: 96,                                   // Keypad Enter
+        0x59: 79, 0x5A: 80, 0x5B: 81,              // Keypad 1 2 3
+        0x5C: 75, 0x5D: 76, 0x5E: 77,              // Keypad 4 5 6
+        0x5F: 71, 0x60: 72, 0x61: 73,              // Keypad 7 8 9
+        0x62: 82, 0x63: 83,                         // Keypad 0 .
+        0x67: 117, 0x85: 121,                       // Keypad = ,
         0xE0: 29, 0xE1: 42, 0xE2: 56, 0xE3: 125,    // left Ctrl Shift Alt Super
         0xE4: 97, 0xE5: 54, 0xE6: 100, 0xE7: 126,   // right Ctrl Shift Alt Super
     ]

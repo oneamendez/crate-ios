@@ -1,0 +1,3 @@
+# Extra command-line arguments. The first Crate virtio console is /dev/hvc0;
+# change this only together with matching DeviceAllow and udev permissions.
+CRATE_FIDO_ARGS="--console /dev/hvc0"

@@ -6,6 +6,7 @@ import SwiftUI
 
 @main
 struct CrateApp: App {
+    @UIApplicationDelegateAdaptor(CrateApplicationDelegate.self) private var applicationDelegate
     @State private var store: MachineStore
     @State private var jit: JITSession
     /// crate runs one VM per process: this is the one.
