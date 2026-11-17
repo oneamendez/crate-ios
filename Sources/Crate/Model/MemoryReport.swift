@@ -7,10 +7,21 @@ import os
 
 /// What iOS lets Crate have, read fresh each time one is made.
 struct MemoryReport {
-    /// STUB: whether the build carries the increased-memory-limit entitlement.
-    /// iOS has no public call that reads a process's own entitlements, and this
-    /// project always asks for it (project.yml), so the answer is fixed for now.
-    let hasIncreasedLimit = true
+    /// Whether the build carries the increased-memory-limit entitlement.
+    /// iOS has no public call that reads a process's own entitlements, but
+    /// crate is always signed for development, so the provisioning profile
+    /// ships in the bundle and lists every entitlement it grants.
+    var hasIncreasedLimit: Bool {
+        guard let url = Bundle.main.url(forResource: "embedded",
+                                        withExtension: "mobileprovision"),
+              let profile = try? Data(contentsOf: url) else { return false }
+        // ponytail: byte scan, not CMS decode. The name appears only in the
+        // profile's entitlement dictionary, so its presence means granted.
+        return profile.range(of: Data(Self.increasedLimitEntitlement.utf8)) != nil
+    }
+
+    private static let increasedLimitEntitlement =
+        "com.apple.developer.kernel.increased-memory-limit"
 
     /// RAM in the device.
     let physical: UInt64
