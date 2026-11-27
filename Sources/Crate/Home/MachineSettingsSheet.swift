@@ -4,8 +4,7 @@
 
 import SwiftUI
 
-/// One VM's settings, from its card's menu: its memory, and on iPhone Duo how
-/// its screen sits.
+/// One VM's settings, from its card's menu.
 struct MachineSettingsSheet: View {
     let machine: Machine
 
@@ -29,6 +28,31 @@ struct MachineSettingsSheet: View {
                     Text("Memory Limit")
                 } footer: {
                     Text(memoryFooter)
+                }
+
+                Section {
+                    ForEach(portForwards.wrappedValue, id: \.hostPort) { rule in
+                        NavigationLink {
+                            PortForwardEditor(rules: portForwards, original: rule)
+                        } label: {
+                            LabeledContent("127.0.0.1:\(String(rule.hostPort))",
+                                           value: "VM port \(String(rule.guestPort))")
+                        }
+                    }
+                    .onDelete { offsets in
+                        var rules = portForwards.wrappedValue
+                        rules.remove(atOffsets: offsets)
+                        portForwards.wrappedValue = rules
+                    }
+                    NavigationLink {
+                        PortForwardEditor(rules: portForwards)
+                    } label: {
+                        Label("Add Port", systemImage: "plus")
+                    }
+                } header: {
+                    Text("Port Forwarding")
+                } footer: {
+                    Text("Connect to a VM service on this device using 127.0.0.1 and the device port. TCP rules apply the next time the VM starts.")
                 }
 
                 if hasHinge {
@@ -93,5 +117,74 @@ struct MachineSettingsSheet: View {
 
     private var current: Machine {
         store.machines.first { $0.id == machine.id } ?? machine
+    }
+
+    private var portForwards: Binding<[PortForward]> {
+        Binding(
+            get: { current.portForwards ?? [] },
+            set: { rules in
+                var changed = current
+                changed.portForwards = rules
+                store.update(changed)
+            })
+    }
+}
+
+private struct PortForwardEditor: View {
+    @Binding private var rules: [PortForward]
+    @Environment(\.dismiss) private var dismiss
+    private let original: PortForward?
+    @State private var host: String
+    @State private var guest: String
+
+    init(rules: Binding<[PortForward]>, original: PortForward? = nil) {
+        _rules = rules
+        self.original = original
+        _host = State(initialValue: original.map { String($0.hostPort) } ?? "")
+        _guest = State(initialValue: original.map { String($0.guestPort) } ?? "")
+    }
+
+    private var rule: PortForward? { PortForward(host: host, guest: guest) }
+
+    private var hostInUse: Bool {
+        guard let port = UInt16(host), port != original?.hostPort else { return false }
+        return rules.contains { $0.hostPort == port }
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                LabeledContent("Device port") {
+                    TextField("8080", text: $host).accessibilityLabel("Device port")
+                }
+                LabeledContent("VM port") {
+                    TextField("80", text: $guest).accessibilityLabel("VM port")
+                }
+            } footer: {
+                if hostInUse {
+                    Text("Another rule already uses this device port.")
+                } else {
+                    Text("Enter port numbers from 1 to 65535.")
+                }
+            }
+            .multilineTextAlignment(.trailing)
+            .keyboardType(.numberPad)
+        }
+        .navigationTitle(original == nil ? "Add Port" : "Edit Port")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Save") {
+                    guard let rule, !hostInUse else { return }
+                    if let original, let index = rules.firstIndex(of: original) {
+                        rules[index] = rule
+                    } else {
+                        rules.append(rule)
+                    }
+                    dismiss()
+                }
+                .disabled(rule == nil || hostInUse)
+            }
+        }
     }
 }

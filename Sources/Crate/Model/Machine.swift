@@ -4,6 +4,18 @@
 
 import Foundation
 
+struct PortForward: Codable, Hashable, Sendable {
+    let hostPort: UInt16
+    let guestPort: UInt16
+
+    init?(host: String, guest: String) {
+        guard let hostPort = UInt16(host), hostPort > 0,
+              let guestPort = UInt16(guest), guestPort > 0 else { return nil }
+        self.hostPort = hostPort
+        self.guestPort = guestPort
+    }
+}
+
 /// One installed VM: a distribution at a version, and the hardware it is given.
 struct Machine: Identifiable, Codable, Hashable {
     var id = UUID()
@@ -32,6 +44,8 @@ struct Machine: Identifiable, Codable, Hashable {
     /// When its card's preview (GuestFiles.preview) was last saved; nil
     /// before it has been stopped from its screen.
     var previewDate: Date?
+    /// Absent in saved VMs from before port forwarding.
+    var portForwards: [PortForward]?
 
     var isFullWidthInLandscape: Bool { fullWidthInLandscape ?? true }
 

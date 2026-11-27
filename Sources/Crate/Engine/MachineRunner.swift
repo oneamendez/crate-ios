@@ -137,6 +137,7 @@ final class MachineRunner {
         /// The first-boot settings, when the VM was installed with them.
         let seed: String?
         let commandLine: String
+        let portForwards: [PortForward]
         let displayModes: [crate_display_mode]
 
         init(vm: Machine, files: GuestFiles, display: DisplayBridge) {
@@ -148,6 +149,7 @@ final class MachineRunner {
             disk = files.disk.path
             seed = FileManager.default.fileExists(atPath: files.seed.path) ? files.seed.path : nil
             commandLine = vm.cmdline ?? Self.commandLine
+            portForwards = vm.portForwards ?? []
             displayModes = display.modes(after: Self.modes(preferring: vm.display))
         }
 
@@ -235,7 +237,17 @@ final class MachineRunner {
             },
             {
                 var network: UInt32 = 0
-                return check(crate_config_add_network(config, &network), "the network")
+                if let failure = check(crate_config_add_network(config, &network), "the network") {
+                    return failure
+                }
+                for rule in settings.portForwards {
+                    let status = crate_config_add_port_forward(config, network, CRATE_TCP, "127.0.0.1",
+                                                               rule.hostPort, rule.guestPort)
+                    if let failure = check(status, "port forward \(rule.hostPort) → \(rule.guestPort)") {
+                        return failure
+                    }
+                }
+                return nil
             },
             {
                 var callbacks = console.callbacks
